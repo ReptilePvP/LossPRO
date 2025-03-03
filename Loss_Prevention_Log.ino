@@ -11,23 +11,10 @@ SPIClass SPI_SD; // Custom SPI instance for SD card
 
 // Debug flag - set to true to enable debug output
 #define DEBUG_ENABLED true
-#define VERBOSE_WIFI_DEBUG false  // Set to false to reduce WiFi reconnection messages in serial monitor
 
 // Debug macros
 #define DEBUG_PRINT(x) if(DEBUG_ENABLED) { Serial.print(millis()); Serial.print(": "); Serial.println(x); }
 #define DEBUG_PRINTF(x, ...) if(DEBUG_ENABLED) { Serial.print(millis()); Serial.print(": "); Serial.printf(x, __VA_ARGS__); }
-
-// Screen identifiers for cleanScreen function
-#define SCREEN_MAIN 0
-#define SCREEN_GENDER 1
-#define SCREEN_COLOR_SHIRT 2
-#define SCREEN_COLOR_PANTS 3
-#define SCREEN_COLOR_SHOES 4
-#define SCREEN_ITEM 5
-#define SCREEN_CONFIRM 6
-#define SCREEN_WIFI 7
-#define SCREEN_WIFI_MANAGER 8
-#define SCREEN_VIEW_LOGS 9
 
 // SD Card pins for M5Stack CoreS3
 #define SD_SPI_SCK_PIN  36
@@ -36,16 +23,12 @@ SPIClass SPI_SD; // Custom SPI instance for SD card
 #define SD_SPI_CS_PIN   4
 #define TFT_DC 35
 
+
 // Forward declarations for timer callbacks
 void scan_timer_callback(lv_timer_t* timer);
 void network_batch_timer_callback(lv_timer_t* timer);
 void wifi_btn_event_callback(lv_event_t* e);
 void cleanupWiFiResources();
-void createWiFiManagerScreen();
-static void auto_reconnect_event_cb(lv_event_t *e);
-void wifi_back_event_cb(lv_event_t *e);
-void cleanScreen(int screen_id);
-void updateSavedNetworksDisplay(lv_obj_t *container);
 
 // Function declarations
 void initStyles();
@@ -66,6 +49,7 @@ void scanNetworks();
 void showWiFiKeyboard();
 void connectToWiFi();
 void createWiFiScreen();
+void createWiFiManagerScreen();
 void loadSavedNetworks();
 void saveNetworks();
 void connectToSavedNetworks();
@@ -89,15 +73,15 @@ String selectedShoesColors = "";
 
 // WiFi connection management
 unsigned long lastWiFiConnectionAttempt = 0;
-const unsigned long WIFI_RECONNECT_INTERVAL = 30000; // 30 seconds between connection attempts (increased from 10s)
+const unsigned long WIFI_RECONNECT_INTERVAL = 10000; // 10 seconds between connection attempts
 const int MAX_WIFI_CONNECTION_ATTEMPTS = 5; // Maximum number of consecutive connection attempts
 int wifiConnectionAttempts = 0;
-bool wifiReconnectEnabled = false; // Default to manual connection mode
+bool wifiReconnectEnabled = true;
 
 // WiFi scan management
 bool wifiScanInProgress = false;
 unsigned long lastScanStartTime = 0;
-const unsigned long SCAN_TIMEOUT = 15000; // 15 seconds timeout for WiFi scan
+const unsigned long SCAN_TIMEOUT = 10000; // 10 seconds timeout for WiFi scan
 
 // Global variables for network processing
 static int currentBatch = 0;
@@ -137,15 +121,17 @@ const char DEFAULT_SSID[] = "Wack House";
 const char DEFAULT_PASS[] = "justice69";
 
 // WiFi network management
-#define MAX_NETWORKS 10
+#define MAX_NETWORKS 5
+
 struct WifiNetwork {
     char ssid[33];
     char password[65];
-    bool active;
 };
+
 static WifiNetwork savedNetworks[MAX_NETWORKS];
 static int numSavedNetworks = 0;
 static bool wifiConfigured = false;
+bool manualDisconnect = false; // Flag to track if disconnection was user-initiated
 
 // Menu options
 const char* genders[] = {"Male", "Female"};
@@ -404,22 +390,14 @@ void setup() {
     initStyles();
     DEBUG_PRINT("UI styles initialized");
     
-    // Initialize preferences
-    preferences.begin("losslog", false);
-    
-    // Load WiFi networks
-    loadSavedNetworks();
-    
-    // Load auto-reconnect preference
-    wifiReconnectEnabled = preferences.getBool("autoReconnect", false);
-    DEBUG_PRINTF("Auto-reconnect loaded: %d\n", wifiReconnectEnabled);
-    
     // Initialize file system after display is set up
     initFileSystem();
     
     createMainMenu();
     DEBUG_PRINT("Main menu created");
     
+    loadSavedNetworks();
+    connectToSavedNetworks();
     lastLvglTick = millis();
     
     // Sync time with NTP server if WiFi is connected
@@ -454,7 +432,6 @@ void loop() {
         DEBUG_PRINT("WiFi scan timeout detected in main loop");
         wifiScanInProgress = false;
         
-        // If we're on the WiFi screen, update the status
         if (wifi_status_label && lv_scr_act() == wifi_screen) {
             lv_label_set_text(wifi_status_label, "Scan timed out. Try again.");
         }
@@ -462,49 +439,34 @@ void loop() {
     
     // WiFi reconnection logic
     if (wifiReconnectEnabled && WiFi.status() != WL_CONNECTED && 
+        !manualDisconnect && // Only reconnect if not manually disconnected
         millis() - lastWiFiConnectionAttempt > WIFI_RECONNECT_INTERVAL) {
         
-        // Only attempt reconnection if we haven't exceeded max attempts
         if (wifiConnectionAttempts < MAX_WIFI_CONNECTION_ATTEMPTS) {
-            if (VERBOSE_WIFI_DEBUG) {
-                DEBUG_PRINTF("WiFi.status(): %d\n", WiFi.status());
-                DEBUG_PRINTF("Connection to \"%s\" failed\n", savedNetworks[0].ssid);
-                DEBUG_PRINTF("Retrying in  \"%d\" milliseconds\n", WIFI_RECONNECT_INTERVAL);
-            } else if (wifiConnectionAttempts == 0) {
-                // Only print the first attempt message when not in verbose mode
-                DEBUG_PRINT("WiFi disconnected. Will attempt reconnection.");
-            }
+            DEBUG_PRINTF("WiFi.status(): %d\n", WiFi.status());
+            DEBUG_PRINTF("Retrying connection in %d milliseconds\n", WIFI_RECONNECT_INTERVAL);
             
-            // Try to reconnect to the last active network
-            for (int i = 0; i < numSavedNetworks; i++) {
-                if (savedNetworks[i].active) {
-                    WiFi.disconnect();
-                    delay(100);
-                    WiFi.begin(savedNetworks[i].ssid, savedNetworks[i].password);
-                    lastWiFiConnectionAttempt = millis();
-                    wifiConnectionAttempts++;
-                    break;
-                }
+            if (numSavedNetworks > 0) {
+                WiFi.disconnect();
+                delay(100);
+                WiFi.begin(savedNetworks[0].ssid, savedNetworks[0].password); // Use first network as default
+                lastWiFiConnectionAttempt = millis();
+                wifiConnectionAttempts++;
             }
         } else {
-            // We've exceeded max attempts, stop trying for now
-            if (VERBOSE_WIFI_DEBUG || wifiConnectionAttempts == MAX_WIFI_CONNECTION_ATTEMPTS) {
-                // Only print once when we reach the max attempts
-                DEBUG_PRINT("Max WiFi connection attempts reached. Pausing reconnection attempts.");
-            }
-            // Reset counter after a longer interval
+            DEBUG_PRINT("Max WiFi connection attempts reached. Pausing reconnection attempts.");
             if (millis() - lastWiFiConnectionAttempt > WIFI_RECONNECT_INTERVAL * 6) {
                 wifiConnectionAttempts = 0;
             }
         }
     }
     
-    // Reset connection attempts counter when connected
+    // Reset connection attempts counter and manualDisconnect when connected
     if (WiFi.status() == WL_CONNECTED && wifiConnectionAttempts > 0) {
         wifiConnectionAttempts = 0;
+        manualDisconnect = false; // Reset flag when connected
         DEBUG_PRINT("WiFi connected successfully");
         
-        // Sync time with NTP server when we connect
         static bool timeSynced = false;
         if (!timeSynced) {
             syncTimeWithNTP();
@@ -555,30 +517,57 @@ void addStatusBar(lv_obj_t* screen) {
     lv_obj_set_style_text_color(status_bar, lv_color_hex(0xFFFFFF), 0);
     lv_label_set_text(status_bar, "Ready");
 }
+
 void createMainMenu() {
     // Clean up all existing screens to prevent memory leaks
     if (mainScreen && lv_obj_is_valid(mainScreen)) {
         DEBUG_PRINT("Cleaning existing main screen");
-        lv_obj_del(mainScreen); // Use synchronous deletion
+        lv_obj_del_async(mainScreen); // Defer deletion
         mainScreen = nullptr;
     }
     
     if (wifi_screen && lv_obj_is_valid(wifi_screen)) {
         DEBUG_PRINT("Cleaning existing wifi screen");
         cleanupWiFiResources();
-        lv_obj_del(wifi_screen);
+        lv_obj_del_async(wifi_screen);
         wifi_screen = nullptr;
     }
     
     if (wifi_manager_screen && lv_obj_is_valid(wifi_manager_screen)) {
         DEBUG_PRINT("Cleaning existing wifi manager screen");
-        lv_obj_del(wifi_manager_screen);
+        lv_obj_del_async(wifi_manager_screen);
         wifi_manager_screen = nullptr;
     }
     
-    // Process any pending deletions
-    lv_timer_handler();
-    delay(10); // Small delay to ensure stability
+    if (wifi_keyboard && lv_obj_is_valid(wifi_keyboard)) {
+        DEBUG_PRINT("Cleaning existing wifi keyboard");
+        lv_obj_del_async(wifi_keyboard);
+        wifi_keyboard = nullptr;
+    }
+    
+    if (genderMenu && lv_obj_is_valid(genderMenu)) {
+        DEBUG_PRINT("Cleaning existing gender menu");
+        lv_obj_del_async(genderMenu);
+        genderMenu = nullptr;
+    }
+    
+    if (colorMenu && lv_obj_is_valid(colorMenu)) {
+        DEBUG_PRINT("Cleaning existing color menu");
+        lv_obj_del_async(colorMenu);
+        colorMenu = nullptr;
+    }
+    
+    if (itemMenu && lv_obj_is_valid(itemMenu)) {
+        DEBUG_PRINT("Cleaning existing item menu");
+        lv_obj_del_async(itemMenu);
+        itemMenu = nullptr;
+    }
+    
+    if (confirmScreen && lv_obj_is_valid(confirmScreen)) {
+        DEBUG_PRINT("Cleaning existing confirm screen");
+        lv_obj_del_async(confirmScreen);
+        confirmScreen = nullptr;
+    }
     
     // Create new main screen
     mainScreen = lv_obj_create(NULL);
@@ -642,7 +631,7 @@ void updateStatus(const char* message, uint32_t color = 0xFFFFFF) {
 }
 
 void updateWifiIndicator() {
-    if (!wifiIndicator || !lv_obj_is_valid(wifiIndicator)) return;
+    if (!wifiIndicator) return;
     
     int wifiStatus = WiFi.status();
     
@@ -715,7 +704,7 @@ void addBatteryIndicator(lv_obj_t *screen) {
 }
 
 void updateBatteryIndicator() {
-    if (!batteryIndicator || !lv_obj_is_valid(batteryIndicator)) return;
+    if (!batteryIndicator) return;
     
     unsigned long currentTime = millis();
     int batteryLevel;
@@ -2018,6 +2007,7 @@ void showWiFiKeyboard() {
 void connectToWiFi() {
     DEBUG_PRINTF("Connecting to %s with password %s\n", selected_ssid, selected_password);
     
+    // Show a connecting dialog with spinner
     lv_obj_t* connecting_box = lv_msgbox_create(wifi_screen, "Connecting", 
         "Connecting to WiFi network...", NULL, false);
     lv_obj_set_size(connecting_box, 250, 150);
@@ -2044,34 +2034,35 @@ void connectToWiFi() {
     int attempt = 0;
     bool connected = false;
     
-    // Try to connect with timeout
-    while (attempt < 20) { // 10 second timeout
+    // Try to connect with timeout (10 seconds)
+    while (attempt < 20) {
         if (WiFi.status() == WL_CONNECTED) {
             connected = true;
             break;
         }
-        
         delay(500);
         Serial.print(".");
         lv_timer_handler();
         attempt++;
     }
     
+    // Clean up the connecting dialog
     lv_obj_del(connecting_box);
     
     if (connected) {
         Serial.println("\nConnected to WiFi!");
         
         // Reset connection attempts counter
-        wifiConnectionAttempts = 0; // Reset connection attempts counter
+        wifiConnectionAttempts = 0;
+        manualDisconnect = false; // Reset flag on successful connection
         
-        // Save this network to preferences
+        // Save this network to preferences (for backward compatibility with old code)
         preferences.begin("wifi", false);
         preferences.putString("ssid", selected_ssid);
         preferences.putString("password", selected_password);
         preferences.end();
         
-        // Also save to our network list if it's not already there
+        // Add or update the network in savedNetworks
         bool networkExists = false;
         int emptySlot = -1;
         
@@ -2080,13 +2071,11 @@ void connectToWiFi() {
                 // Update password if network already exists
                 strncpy(savedNetworks[i].password, selected_password, 64);
                 savedNetworks[i].password[64] = '\0';
-                savedNetworks[i].active = true;
                 networkExists = true;
                 break;
             }
-            
             // Find an empty slot if we need to add a new network
-            if (emptySlot == -1 && !savedNetworks[i].active) {
+            if (emptySlot == -1 && strlen(savedNetworks[i].ssid) == 0) {
                 emptySlot = i;
             }
         }
@@ -2094,22 +2083,17 @@ void connectToWiFi() {
         // Add new network if it doesn't exist
         if (!networkExists) {
             int idx = emptySlot;
-            
-            // If no empty slot, use the next available slot or overwrite if full
             if (idx == -1) {
                 if (numSavedNetworks < MAX_NETWORKS) {
                     idx = numSavedNetworks++;
                 } else {
-                    // Overwrite the last network if we're full
-                    idx = MAX_NETWORKS - 1;
+                    idx = MAX_NETWORKS - 1; // Overwrite last slot if full
                 }
             }
-            
             strncpy(savedNetworks[idx].ssid, selected_ssid, 32);
             savedNetworks[idx].ssid[32] = '\0';
             strncpy(savedNetworks[idx].password, selected_password, 64);
             savedNetworks[idx].password[64] = '\0';
-            savedNetworks[idx].active = true;
         }
         
         // Save the updated network list
@@ -2118,12 +2102,8 @@ void connectToWiFi() {
         // Update the WiFi indicator
         updateWifiIndicator();
         
-        lv_obj_t* success_box = lv_msgbox_create(wifi_screen, "Connected", 
-            "Successfully connected to the WiFi network!", NULL, true);
-        lv_obj_set_size(success_box, 250, 150);
-        lv_obj_center(success_box);
-        
-        scanNetworks();
+        // Refresh the WiFi Manager screen instead of showing a message box
+        createWiFiManagerScreen();
     } else {
         Serial.println("\nFailed to connect to WiFi.");
         
@@ -2155,28 +2135,244 @@ void connectToWiFi() {
     }
 }
 
+void createWiFiManagerScreen() {
+    // Clean up existing manager screen if it exists
+    if (wifi_manager_screen && lv_obj_is_valid(wifi_manager_screen)) {
+        lv_obj_del(wifi_manager_screen);
+        wifi_manager_screen = nullptr;
+    }
+    
+    wifi_manager_screen = lv_obj_create(NULL);
+    if (!wifi_manager_screen) {
+        DEBUG_PRINT("Failed to create WiFi manager screen");
+        return;
+    }
+    lv_obj_add_style(wifi_manager_screen, &style_screen, 0);
+    
+    // Header
+    lv_obj_t* header = lv_obj_create(wifi_manager_screen);
+    lv_obj_set_size(header, SCREEN_WIDTH, 50);
+    lv_obj_set_style_bg_color(header, lv_color_hex(0x333333), 0);
+    
+    lv_obj_t* title = lv_label_create(header);
+    lv_label_set_text(title, "WiFi Settings");
+    lv_obj_add_style(title, &style_title, 0);
+    lv_obj_align(title, LV_ALIGN_CENTER, 0, 0);
+
+    // Add indicators
+    addWifiIndicator(wifi_manager_screen);
+    addBatteryIndicator(wifi_manager_screen);
+
+    // Status label
+    lv_obj_t* status_label = lv_label_create(wifi_manager_screen);
+    lv_obj_align(status_label, LV_ALIGN_TOP_MID, 0, 60);
+    lv_label_set_text(status_label, "Saved Networks:");
+
+    // Network list container
+    saved_networks_list = lv_obj_create(wifi_manager_screen);
+    lv_obj_set_size(saved_networks_list, SCREEN_WIDTH - 20, SCREEN_HEIGHT - 120);
+    lv_obj_align(saved_networks_list, LV_ALIGN_TOP_MID, 0, 80);
+    lv_obj_set_style_bg_color(saved_networks_list, lv_color_hex(0x2D2D2D), 0);
+    lv_obj_set_scrollbar_mode(saved_networks_list, LV_SCROLLBAR_MODE_ACTIVE);
+    lv_obj_add_flag(saved_networks_list, LV_OBJ_FLAG_SCROLLABLE);
+
+    // Populate saved networks
+    if (numSavedNetworks == 0) {
+        lv_obj_t* no_networks_label = lv_label_create(saved_networks_list);
+        lv_label_set_text(no_networks_label, "No saved networks");
+        lv_obj_align(no_networks_label, LV_ALIGN_CENTER, 0, 0);
+    } else {
+        for (int i = 0; i < numSavedNetworks; i++) {
+            // Network container
+            lv_obj_t* network_container = lv_obj_create(saved_networks_list);
+            lv_obj_set_width(network_container, SCREEN_WIDTH - 40);
+            lv_obj_set_height(network_container, 60);
+            lv_obj_set_style_bg_color(network_container, lv_color_hex(0x3A3A3A), 0);
+            lv_obj_set_style_pad_all(network_container, 5, 0);
+            lv_obj_set_pos(network_container, 0, i * 70);
+
+            // SSID Label
+            lv_obj_t* ssid_label = lv_label_create(network_container);
+            String status = (WiFi.status() == WL_CONNECTED && strcmp(WiFi.SSID().c_str(), savedNetworks[i].ssid) == 0) 
+                ? " (Connected)" : "";
+            String ssid_text = String(savedNetworks[i].ssid) + status;
+            lv_label_set_text(ssid_label, ssid_text.c_str());
+            lv_obj_align(ssid_label, LV_ALIGN_LEFT_MID, 5, 0);
+            lv_obj_set_style_text_font(ssid_label, &lv_font_montserrat_14, 0);
+
+            // Connect Button
+            lv_obj_t* connect_btn = lv_btn_create(network_container);
+            lv_obj_set_size(connect_btn, 80, 40);
+            lv_obj_align(connect_btn, LV_ALIGN_RIGHT_MID, -90, 0);
+            lv_obj_add_style(connect_btn, &style_btn, 0);
+            lv_obj_add_style(connect_btn, &style_btn_pressed, LV_STATE_PRESSED);
+            lv_obj_t* connect_label = lv_label_create(connect_btn);
+            lv_label_set_text(connect_label, "Connect");
+            lv_obj_center(connect_label);
+            lv_obj_set_user_data(connect_btn, (void*)(intptr_t)i);
+
+            // Disconnect Button
+            lv_obj_t* disconnect_btn = lv_btn_create(network_container);
+            lv_obj_set_size(disconnect_btn, 80, 40);
+            lv_obj_align(disconnect_btn, LV_ALIGN_RIGHT_MID, -5, 0);
+            lv_obj_add_style(disconnect_btn, &style_btn, 0);
+            lv_obj_add_style(disconnect_btn, &style_btn_pressed, LV_STATE_PRESSED);
+            lv_obj_t* disconnect_label = lv_label_create(disconnect_btn);
+            lv_label_set_text(disconnect_label, "Disconnect");
+            lv_obj_center(disconnect_label);
+            lv_obj_set_user_data(disconnect_btn, (void*)(intptr_t)i);
+
+            // Connect Button Event
+            lv_obj_add_event_cb(connect_btn, [](lv_event_t* e) {
+                lv_obj_t* btn = lv_event_get_target(e);
+                if (!btn || !lv_obj_is_valid(btn)) {
+                    DEBUG_PRINT("Invalid connect button");
+                    return;
+                }
+                int idx = (int)(intptr_t)lv_obj_get_user_data(btn);
+                if (idx < 0 || idx >= numSavedNetworks) {
+                    DEBUG_PRINT("Invalid network index");
+                    return;
+                }
+
+                DEBUG_PRINTF("Connecting to: %s\n", savedNetworks[idx].ssid);
+
+                // Show spinner
+                lv_obj_t* spinner = lv_spinner_create(lv_scr_act(), 1000, 60);
+                lv_obj_set_size(spinner, 40, 40);
+                lv_obj_center(spinner);
+                lv_timer_handler(); // Force UI update
+
+                // Attempt connection
+                WiFi.disconnect();
+                delay(100);
+                WiFi.mode(WIFI_STA); // Ensure STA mode
+                WiFi.begin(savedNetworks[idx].ssid, savedNetworks[idx].password);
+
+                int timeout = 0;
+                while (WiFi.status() != WL_CONNECTED && timeout < 20) {
+                    delay(500);
+                    DEBUG_PRINT(".");
+                    timeout++;
+                }
+
+                // Reset manualDisconnect on successful connection
+                if (WiFi.status() == WL_CONNECTED) {
+                    manualDisconnect = false;
+                    DEBUG_PRINT("Manual connection successful, auto-reconnect enabled");
+                }
+
+                // Clean up spinner
+                if (spinner && lv_obj_is_valid(spinner)) {
+                    lv_obj_del(spinner);
+                }
+
+                updateWifiIndicator();
+
+                // Show result
+                const char* msg = (WiFi.status() == WL_CONNECTED) 
+                    ? "Connected successfully!" 
+                    : "Failed to connect";
+                lv_obj_t* msgbox = lv_msgbox_create(NULL, "Connection Status", msg, NULL, true);
+                lv_obj_set_size(msgbox, 250, 150);
+                lv_obj_center(msgbox);
+
+                // Store current screen and reload safely
+                lv_obj_t* current_screen = wifi_manager_screen;
+                wifi_manager_screen = nullptr; // Prevent double deletion
+                if (current_screen && lv_obj_is_valid(current_screen)) {
+                    lv_obj_del_async(current_screen); // Defer deletion
+                }
+                delay(50); // Small delay for stability
+                createWiFiManagerScreen();
+            }, LV_EVENT_CLICKED, NULL);
+
+            // Disconnect Button Event
+            lv_obj_add_event_cb(disconnect_btn, [](lv_event_t* e) {
+                lv_obj_t* btn = lv_event_get_target(e);
+                if (!btn || !lv_obj_is_valid(btn)) {
+                    DEBUG_PRINT("Invalid disconnect button");
+                    return;
+                }
+                int idx = (int)(intptr_t)lv_obj_get_user_data(btn);
+                if (idx < 0 || idx >= numSavedNetworks) {
+                    DEBUG_PRINT("Invalid network index");
+                    return;
+                }
+
+                if (WiFi.status() == WL_CONNECTED && strcmp(WiFi.SSID().c_str(), savedNetworks[idx].ssid) == 0) {
+                    DEBUG_PRINTF("Disconnecting from: %s\n", savedNetworks[idx].ssid);
+                    WiFi.disconnect();
+                    delay(100);
+                    manualDisconnect = true; // Prevent auto-reconnect
+                    DEBUG_PRINT("Manual disconnect triggered, auto-reconnect disabled");
+                    updateWifiIndicator();
+
+                    lv_obj_t* msgbox = lv_msgbox_create(NULL, "Disconnected", 
+                        "Disconnected from network", NULL, true);
+                    lv_obj_set_size(msgbox, 250, 150);
+                    lv_obj_center(msgbox);
+
+                    // Store current screen and reload safely
+                    lv_obj_t* current_screen = wifi_manager_screen;
+                    wifi_manager_screen = nullptr; // Prevent double deletion
+                    if (current_screen && lv_obj_is_valid(current_screen)) {
+                        lv_obj_del_async(current_screen); // Defer deletion
+                    }
+                    delay(50); // Small delay for stability
+                    createWiFiManagerScreen();
+                } else {
+                    DEBUG_PRINT("Not connected to this network or already disconnected");
+                }
+            }, LV_EVENT_CLICKED, NULL);
+        }
+    }
+
+    // Add New Network Button
+    lv_obj_t* add_btn = lv_btn_create(wifi_manager_screen);
+    lv_obj_align(add_btn, LV_ALIGN_BOTTOM_RIGHT, -10, -10);
+    lv_obj_set_size(add_btn, 90, 40);
+    lv_obj_add_style(add_btn, &style_btn, 0);
+    lv_obj_add_style(add_btn, &style_btn_pressed, LV_STATE_PRESSED);
+    lv_obj_t* add_label = lv_label_create(add_btn);
+    lv_label_set_text(add_label, "Add New");
+    lv_obj_center(add_label);
+    lv_obj_add_event_cb(add_btn, [](lv_event_t* e) {
+        DEBUG_PRINT("Add New button pressed");
+        createWiFiScreen();
+    }, LV_EVENT_CLICKED, NULL);
+
+    // Back Button
+    lv_obj_t* back_btn = lv_btn_create(wifi_manager_screen);
+    lv_obj_align(back_btn, LV_ALIGN_BOTTOM_LEFT, 10, -10);
+    lv_obj_set_size(back_btn, 90, 40);
+    lv_obj_add_style(back_btn, &style_btn, 0);
+    lv_obj_add_style(back_btn, &style_btn_pressed, LV_STATE_PRESSED);
+    lv_obj_t* back_label = lv_label_create(back_btn);
+    lv_label_set_text(back_label, LV_SYMBOL_LEFT " Back");
+    lv_obj_center(back_label);
+    lv_obj_add_event_cb(back_btn, [](lv_event_t* e) {
+        DEBUG_PRINT("Returning to main menu from WiFi Manager");
+        createMainMenu();
+    }, LV_EVENT_CLICKED, NULL);
+
+    lv_scr_load(wifi_manager_screen);
+    DEBUG_PRINT("WiFi Manager screen loaded");
+}
+
 void createWiFiScreen() {
-    // Stop any ongoing WiFi operations first
-    wifiScanInProgress = false;
-    WiFi.scanDelete();
-    
-    // Store local copy of screen pointer
-    lv_obj_t* screen_to_delete = wifi_screen;
-    wifi_screen = nullptr; // Clear global pointer first
-    
-    // Clean up resources
-    cleanupWiFiResources();
-    
-    // Now safe to delete the old screen
-    if (screen_to_delete != nullptr) {
-        lv_obj_del(screen_to_delete);
+    if (wifi_screen) {
+        cleanupWiFiResources(); // Clean up resources before deleting the screen
+        lv_obj_del(wifi_screen);
+        wifi_screen = nullptr;
     }
     
     wifi_screen = lv_obj_create(NULL);
     lv_obj_add_style(wifi_screen, &style_screen, 0);
     
+    // Header
     lv_obj_t* header = lv_obj_create(wifi_screen);
-    lv_obj_set_size(header, 320, 50);
+    lv_obj_set_size(header, SCREEN_WIDTH, 50);
     lv_obj_set_style_bg_color(header, lv_color_hex(0x333333), 0);
     
     lv_obj_t* title = lv_label_create(header);
@@ -2184,19 +2380,22 @@ void createWiFiScreen() {
     lv_obj_add_style(title, &style_title, 0);
     lv_obj_align(title, LV_ALIGN_CENTER, 0, 0);
 
-    // Add WiFi and battery indicators
+    // Add indicators
     addWifiIndicator(wifi_screen);
     addBatteryIndicator(wifi_screen);
-    lv_timer_handler(); // Process any pending UI updates
     
+    // Status label
     wifi_status_label = lv_label_create(wifi_screen);
     lv_obj_align(wifi_status_label, LV_ALIGN_TOP_MID, 0, 60);
+    lv_label_set_text(wifi_status_label, "Scanning for networks...");
     
+    // WiFi list
     wifi_list = lv_list_create(wifi_screen);
-    lv_obj_set_size(wifi_list, 300, 160);
+    lv_obj_set_size(wifi_list, SCREEN_WIDTH - 20, SCREEN_HEIGHT - 120);
     lv_obj_align(wifi_list, LV_ALIGN_TOP_MID, 0, 80);
     lv_obj_set_style_bg_color(wifi_list, lv_color_hex(0x2D2D2D), 0);
     
+    // Refresh button
     lv_obj_t* refresh_btn = lv_btn_create(wifi_screen);
     lv_obj_align(refresh_btn, LV_ALIGN_BOTTOM_RIGHT, -10, -10);
     lv_obj_set_size(refresh_btn, 90, 40);
@@ -2215,6 +2414,7 @@ void createWiFiScreen() {
         }
     }, LV_EVENT_CLICKED, NULL);
     
+    // Back button
     lv_obj_t* back_btn = lv_btn_create(wifi_screen);
     lv_obj_align(back_btn, LV_ALIGN_BOTTOM_LEFT, 10, -10);
     lv_obj_set_size(back_btn, 90, 40);
@@ -2226,130 +2426,18 @@ void createWiFiScreen() {
     lv_obj_center(back_label);
     
     lv_obj_add_event_cb(back_btn, [](lv_event_t* e) {
-        DEBUG_PRINT("WiFi screen back button pressed");
-        
-        // First clean up all WiFi resources properly
+        DEBUG_PRINT("Returning to WiFi Manager from WiFi Screen");
         cleanupWiFiResources();
-        
-        // Delete the current screen to ensure all child objects are properly cleaned up
-        if (wifi_screen != nullptr) {
-            lv_obj_del(wifi_screen);
-            wifi_screen = nullptr;
+        lv_obj_t* screen_to_delete = wifi_screen;
+        wifi_screen = nullptr;
+        if (screen_to_delete != nullptr) {
+            lv_obj_del(screen_to_delete);
         }
-        
-        // Create the WiFi manager screen after cleaning up
         createWiFiManagerScreen();
     }, LV_EVENT_CLICKED, NULL);
     
     lv_scr_load(wifi_screen);
-    scanNetworks();
-}
-
-void createWiFiManagerScreen() {
-    // Clean up previous screen if it exists
-    cleanScreen(SCREEN_WIFI_MANAGER);
-    
-    // Create a new screen
-    wifi_manager_screen = lv_obj_create(NULL);
-    lv_obj_add_style(wifi_manager_screen, &style_screen, 0);
-    
-    // Create header with back button
-    lv_obj_t *header = lv_obj_create(wifi_manager_screen);
-    lv_obj_set_size(header, SCREEN_WIDTH, 40);
-    lv_obj_set_pos(header, 0, 0);
-    lv_obj_set_style_bg_color(header, lv_color_hex(0x0000AA), 0);
-    lv_obj_set_style_radius(header, 0, 0);
-    lv_obj_clear_flag(header, LV_OBJ_FLAG_SCROLLABLE);
-    
-    lv_obj_t *back_btn = lv_btn_create(header);
-    lv_obj_set_size(back_btn, 60, 30);
-    lv_obj_set_pos(back_btn, 5, 5);
-    lv_obj_set_style_bg_color(back_btn, lv_color_hex(0x0000FF), 0);
-    lv_obj_add_event_cb(back_btn, wifi_back_event_cb, LV_EVENT_CLICKED, NULL);
-    
-    lv_obj_t *title = lv_label_create(header);
-    lv_label_set_text(title, "WiFi Manager");
-    lv_obj_set_style_text_color(title, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_align(title, LV_ALIGN_CENTER, 0, 0);
-    
-    // Add WiFi and battery indicators
-    addWifiIndicator(wifi_manager_screen);
-    addBatteryIndicator(wifi_manager_screen);
-    
-    lv_obj_t* status_label = lv_label_create(wifi_manager_screen);
-    lv_obj_align(status_label, LV_ALIGN_TOP_MID, 0, 60);
-    
-    if (numSavedNetworks == 0) {
-        lv_label_set_text(status_label, "No saved networks");
-    } else {
-        lv_label_set_text(status_label, "Manage saved networks:");
-    }
-    
-    // Create container for network list
-    lv_obj_t *network_container = lv_obj_create(wifi_manager_screen);
-    lv_obj_set_size(network_container, SCREEN_WIDTH - 20, SCREEN_HEIGHT - 120);
-    lv_obj_set_pos(network_container, 10, 80);
-    lv_obj_set_style_pad_all(network_container, 5, 0);
-    
-    // Display saved networks
-    updateSavedNetworksDisplay(network_container);
-    
-    // Create auto-reconnect toggle switch
-    lv_obj_t *auto_reconnect_container = lv_obj_create(wifi_manager_screen);
-    lv_obj_set_size(auto_reconnect_container, SCREEN_WIDTH - 20, 40);
-    lv_obj_set_pos(auto_reconnect_container, 10, SCREEN_HEIGHT - 45);
-    lv_obj_set_style_pad_all(auto_reconnect_container, 5, 0);
-    
-    lv_obj_t *auto_reconnect_label = lv_label_create(auto_reconnect_container);
-    lv_label_set_text(auto_reconnect_label, "Auto-reconnect:");
-    lv_obj_align(auto_reconnect_label, LV_ALIGN_LEFT_MID, 5, 0);
-    
-    lv_obj_t *auto_reconnect_switch = lv_switch_create(auto_reconnect_container);
-    lv_obj_align(auto_reconnect_switch, LV_ALIGN_RIGHT_MID, -5, 0);
-    if (wifiReconnectEnabled) {
-        lv_obj_add_state(auto_reconnect_switch, LV_STATE_CHECKED);
-    }
-    lv_obj_add_event_cb(auto_reconnect_switch, auto_reconnect_event_cb, LV_EVENT_VALUE_CHANGED, NULL);
-    
-    // Add scan networks button
-    lv_obj_t *scan_btn = lv_btn_create(wifi_manager_screen);
-    lv_obj_set_size(scan_btn, 140, 40);
-    lv_obj_align(scan_btn, LV_ALIGN_TOP_RIGHT, -10, 50);
-    lv_obj_set_style_bg_color(scan_btn, lv_color_hex(0x0000FF), 0);
-    lv_obj_add_style(scan_btn, &style_btn, 0);
-    lv_obj_add_style(scan_btn, &style_btn_pressed, LV_STATE_PRESSED);
-    
-    lv_obj_t *scan_label = lv_label_create(scan_btn);
-    lv_label_set_text(scan_label, LV_SYMBOL_WIFI " Scan Networks");
-    lv_obj_center(scan_label);
-    
-    lv_obj_add_event_cb(scan_btn, [](lv_event_t* e) {
-        DEBUG_PRINT("Scan networks button pressed");
-        createWiFiScreen();
-    }, LV_EVENT_CLICKED, NULL);
-    
-    // Load the screen
-    lv_scr_load(wifi_manager_screen);
-    
-    // Update status indicators
-    updateBatteryIndicator();
-    updateWifiIndicator();
-}
-
-// Callback for auto-reconnect toggle switch
-static void auto_reconnect_event_cb(lv_event_t *e) {
-    lv_obj_t *sw = lv_event_get_target(e);
-    bool checked = lv_obj_has_state(sw, LV_STATE_CHECKED);
-    
-    wifiReconnectEnabled = checked;
-    preferences.putBool("autoReconnect", wifiReconnectEnabled);
-    
-    DEBUG_PRINTF("Auto-reconnect set to: %d\n", wifiReconnectEnabled);
-    
-    // If auto-reconnect was just enabled, try to connect to the active network
-    if (wifiReconnectEnabled) {
-        connectToSavedNetworks();
-    }
+    scanNetworks(); // Start scanning immediately
 }
 
 String getFormattedEntry(const String& entry) {
@@ -2457,11 +2545,10 @@ void createViewLogsScreen() {
     lv_obj_set_style_bg_color(back_btn, lv_color_hex(0x1111AA), LV_STATE_PRESSED);
     
     lv_obj_t* back_label = lv_label_create(back_btn);
-    lv_label_set_text(back_label, "Back");
+    lv_label_set_text(back_label, LV_SYMBOL_LEFT " Back");
     lv_obj_center(back_label);
     lv_obj_add_event_cb(back_btn, [](lv_event_t* e) {
         DEBUG_PRINT("Logs Screen Back button pressed");
-        
         lv_obj_t* current_screen = lv_scr_act();
         if (current_screen && lv_obj_is_valid(current_screen)) {
             DEBUG_PRINT("Deleting logs screen before returning to main menu");
@@ -2480,8 +2567,9 @@ void createViewLogsScreen() {
     lv_obj_set_style_border_color(container, lv_color_hex(0x444444), 0);
     lv_obj_set_style_border_width(container, 1, 0);
     lv_obj_set_style_pad_all(container, 5, 0);
-
-    // Create log label
+    lv_obj_add_flag(container, LV_OBJ_FLAG_SCROLL_MOMENTUM | LV_OBJ_FLAG_SCROLLABLE);
+    current_scroll_obj = container;
+    //
     lv_obj_t* logs_label = lv_label_create(container);
     lv_obj_set_width(logs_label, 280);
     lv_obj_set_style_text_color(logs_label, lv_color_hex(0xFFFFFF), 0);
@@ -2559,6 +2647,7 @@ void createViewLogsScreen() {
     lv_obj_t* clear_label = lv_label_create(clear_btn);
     lv_label_set_text(clear_label, "Clear");
     lv_obj_center(clear_label);
+    
     lv_obj_add_event_cb(clear_btn, [](lv_event_t* e) {
         // Create a confirmation dialog
         static const char* btns[] = {"Yes", "No", ""};
@@ -2657,144 +2746,118 @@ void initStyles() {
 void cleanupWiFiResources() {
     DEBUG_PRINT("Cleaning up WiFi resources");
     
-    wifiScanInProgress = false;
-    WiFi.scanDelete();
+    // Delete the spinner if it exists
+    if (g_spinner != nullptr) {
+        lv_obj_del(g_spinner);
+        g_spinner = nullptr;
+    }
     
+    // Delete the scan timer if it exists
     if (scan_timer != nullptr) {
         lv_timer_del(scan_timer);
         scan_timer = nullptr;
     }
     
+    // Clean up keyboard if it exists
+    if (wifi_keyboard != nullptr) {
+        lv_obj_del(wifi_keyboard);
+        wifi_keyboard = nullptr;
+    }
+    
+    // Clean up the WiFi list and free memory for network buttons
+    if (wifi_list != nullptr) {
+        // Check if wifi_list is still a valid object before accessing its children
+        if (lv_obj_is_valid(wifi_list)) {
+            uint32_t child_count = lv_obj_get_child_cnt(wifi_list);
+            for (uint32_t i = 0; i < child_count; i++) {
+                lv_obj_t* btn = lv_obj_get_child(wifi_list, i);
+                if (btn != nullptr && lv_obj_is_valid(btn)) {
+                    // Get user data safely - only free if not NULL
+                    void* user_data = lv_obj_get_user_data(btn);
+                    if (user_data != nullptr) {
+                        // Only free memory that was dynamically allocated
+                        // Check if the pointer is not just a cast of an integer
+                        if ((intptr_t)user_data > 100) {  // Assuming small integers are used as indices
+                            lv_mem_free(user_data);
+                        }
+                        lv_obj_set_user_data(btn, NULL); // Clear the pointer after freeing
+                    }
+                }
+            }
+        }
+        // We don't delete wifi_list here as it's a child of wifi_screen
+        // and will be deleted when wifi_screen is deleted
+    }
+    
+    // Reset scan state
+    wifiScanInProgress = false;
+    
+    // Cancel any ongoing WiFi scan
+    WiFi.scanDelete();
+    
+    // Reset batch processing variables
     currentBatch = 0;
     totalNetworksFound = 0;
-      
+    
     // Ensure we're connected to the previous network if we have credentials
     if (WiFi.status() != WL_CONNECTED && strlen(selected_ssid) > 0 && strlen(selected_password) > 0) {
         DEBUG_PRINT("Reconnecting to previous network during cleanup");
         WiFi.begin(selected_ssid, selected_password);
     }
-    
-    wifi_list = nullptr;
-    wifi_status_label = nullptr;
-}
-
-void wifi_back_event_cb(lv_event_t *e) {
-    DEBUG_PRINT("WiFi manager back button pressed");
-    
-    // Clean up WiFi resources first
-    cleanupWiFiResources();
-    
-    // Let createMainMenu handle all screen cleanup
-    createMainMenu();
 }
 
 void loadSavedNetworks() {
     Preferences prefs;
     prefs.begin("wifi_config", false);
     
-    numSavedNetworks = prefs.getUInt("numNetworks", 0);
+    numSavedNetworks = prefs.getInt("numNetworks", 0);
     numSavedNetworks = min(numSavedNetworks, MAX_NETWORKS);
     
-    DEBUG_PRINTF("Loading %d saved networks\n", numSavedNetworks);
-    
     for (int i = 0; i < numSavedNetworks; i++) {
-        char ssidKey[16], passKey[16], activeKey[16];
+        char ssidKey[16];
+        char passKey[16];
         sprintf(ssidKey, "ssid%d", i);
         sprintf(passKey, "pass%d", i);
-        sprintf(activeKey, "active%d", i);
         
         String ssid = prefs.getString(ssidKey, "");
         String pass = prefs.getString(passKey, "");
-        bool active = prefs.getBool(activeKey, false);
         
-        if (ssid.length() > 0) {
-            strncpy(savedNetworks[i].ssid, ssid.c_str(), sizeof(savedNetworks[i].ssid) - 1);
-            strncpy(savedNetworks[i].password, pass.c_str(), sizeof(savedNetworks[i].password) - 1);
-            savedNetworks[i].active = active;
-            
-            DEBUG_PRINTF("Loaded network %d: %s (Active: %d)\n", i, savedNetworks[i].ssid, savedNetworks[i].active);
-        }
+        strncpy(savedNetworks[i].ssid, ssid.c_str(), 32);
+        savedNetworks[i].ssid[32] = '\0';
+        strncpy(savedNetworks[i].password, pass.c_str(), 64);
+        savedNetworks[i].password[64] = '\0';
+    }
+    
+    if (numSavedNetworks == 0) {
+        strncpy(savedNetworks[0].ssid, DEFAULT_SSID, 32);
+        strncpy(savedNetworks[0].password, DEFAULT_PASS, 64);
+        numSavedNetworks = 1;
+        saveNetworks();
     }
     
     prefs.end();
-    
-    // If auto-reconnect is enabled, connect to the active network
-    if (wifiReconnectEnabled) {
-        connectToSavedNetworks();
-    } else {
-        DEBUG_PRINT("Auto-reconnect disabled. Manual connection required.");
-    }
 }
 
 void saveNetworks() {
     Preferences prefs;
     prefs.begin("wifi_config", false);
     
-    prefs.putUInt("numNetworks", numSavedNetworks);
+    prefs.putInt("numNetworks", numSavedNetworks);
     
     for (int i = 0; i < numSavedNetworks; i++) {
-        char ssidKey[16], passKey[16], activeKey[16];
+        char ssidKey[16];
+        char passKey[16];
+        
         sprintf(ssidKey, "ssid%d", i);
         sprintf(passKey, "pass%d", i);
-        sprintf(activeKey, "active%d", i);
         
         prefs.putString(ssidKey, savedNetworks[i].ssid);
         prefs.putString(passKey, savedNetworks[i].password);
-        prefs.putBool(activeKey, savedNetworks[i].active);
         
-        DEBUG_PRINTF("Saved network %d: %s (Active: %d)\n", i, savedNetworks[i].ssid, savedNetworks[i].active);
+        DEBUG_PRINTF("Saved network %d: %s\n", i, savedNetworks[i].ssid);
     }
     
     prefs.end();
-}
-
-void connectToSavedNetworks() {
-    DEBUG_PRINT("Attempting to connect to saved networks");
-    
-    if (numSavedNetworks == 0) {
-        DEBUG_PRINT("No saved networks found");
-        return;
-    }
-    
-    WiFi.disconnect();
-    delay(100);
-    
-    bool connected = false;
-    
-    for (int i = 0; i < numSavedNetworks; i++) {
-        if (!savedNetworks[i].active) {
-            DEBUG_PRINTF("Skipping inactive network: %s\n", savedNetworks[i].ssid);
-            continue;
-        }
-        
-        DEBUG_PRINTF("Trying to connect to %s\n", savedNetworks[i].ssid);
-        
-        WiFi.begin(savedNetworks[i].ssid, savedNetworks[i].password);
-        
-        // Wait for connection with timeout
-        int timeout = 0;
-        while (WiFi.status() != WL_CONNECTED && timeout < 20) { // 10 second timeout
-            delay(500);
-            DEBUG_PRINT(".");
-            timeout++;
-        }
-        
-        if (WiFi.status() == WL_CONNECTED) {
-            DEBUG_PRINTF("Connected to %s\n", savedNetworks[i].ssid);
-            connected = true;
-            wifiConnectionAttempts = 0; // Reset connection attempts counter
-            break;
-        } else {
-            DEBUG_PRINTF("Failed to connect to %s\n", savedNetworks[i].ssid);
-            // Initialize the reconnection mechanism
-            lastWiFiConnectionAttempt = millis();
-            wifiConnectionAttempts = 1;
-        }
-    }
-    
-    if (!connected) {
-        DEBUG_PRINT("Could not connect to any saved networks");
-    }
 }
 
 void listSavedEntries() {
@@ -2847,6 +2910,47 @@ void listSavedEntries() {
     digitalWrite(TFT_DC, HIGH);
 }
 
+void connectToSavedNetworks() {
+    DEBUG_PRINT("Attempting to connect to saved networks");
+    
+    if (numSavedNetworks == 0 || WiFi.status() == WL_CONNECTED) {
+        DEBUG_PRINT("No saved networks or already connected");
+        return;
+    }
+    
+    WiFi.disconnect();
+    delay(100);
+    
+    bool connected = false;
+    
+    for (int i = 0; i < numSavedNetworks; i++) {
+        DEBUG_PRINTF("Trying to connect to %s\n", savedNetworks[i].ssid);
+        
+        WiFi.begin(savedNetworks[i].ssid, savedNetworks[i].password);
+        
+        int timeout = 0;
+        while (WiFi.status() != WL_CONNECTED && timeout < 20) {
+            delay(500);
+            DEBUG_PRINT(".");
+            timeout++;
+        }
+        
+        if (WiFi.status() == WL_CONNECTED) {
+            DEBUG_PRINTF("Connected to %s\n", savedNetworks[i].ssid);
+            connected = true;
+            wifiConnectionAttempts = 0;
+            break;
+        } else {
+            DEBUG_PRINTF("Failed to connect to %s\n", savedNetworks[i].ssid);
+            lastWiFiConnectionAttempt = millis();
+            wifiConnectionAttempts = 1;
+        }
+    }
+    
+    if (!connected) {
+        DEBUG_PRINT("Could not connect to any saved networks");
+    }
+}
 void saveEntry(const String& entry) {
     Serial.println("New Entry:");
     Serial.println(entry);
@@ -2888,162 +2992,4 @@ void printf_log(const char *format, ...) {
     if (status_bar != nullptr) {
         lv_label_set_text(status_bar, buf);
     }
-}
-
-void cleanScreen(int screen_id) {
-    DEBUG_PRINTF("Cleaning up screen %d\n", screen_id);
-    
-    switch (screen_id) {
-        case SCREEN_MAIN:
-            if (mainScreen) {
-                lv_obj_del(mainScreen);
-                mainScreen = nullptr;
-            }
-            break;
-        case SCREEN_GENDER:
-            if (genderMenu) {
-                lv_obj_del(genderMenu);
-                genderMenu = nullptr;
-            }
-            break;
-        case SCREEN_COLOR_SHIRT:
-        case SCREEN_COLOR_PANTS:
-        case SCREEN_COLOR_SHOES:
-            if (colorMenu) {
-                lv_obj_del(colorMenu);
-                colorMenu = nullptr;
-            }
-            break;
-        case SCREEN_ITEM:
-            if (itemMenu) {
-                lv_obj_del(itemMenu);
-                itemMenu = nullptr;
-            }
-            break;
-        case SCREEN_CONFIRM:
-            if (confirmScreen) {
-                lv_obj_del(confirmScreen);
-                confirmScreen = nullptr;
-            }
-            break;
-        case SCREEN_WIFI:
-            if (wifi_screen) {
-                lv_obj_del(wifi_screen);
-                wifi_screen = nullptr;
-            }
-            break;
-        case SCREEN_WIFI_MANAGER:
-            if (wifi_manager_screen) {
-                lv_obj_del(wifi_manager_screen);
-                wifi_manager_screen = nullptr;
-            }
-            break;
-        case SCREEN_VIEW_LOGS:
-            // Add handling for view logs screen if needed
-            break;
-        default:
-            DEBUG_PRINTF("Unknown screen ID: %d\n", screen_id);
-            break;
-    }
-}
-
-void updateSavedNetworksDisplay(lv_obj_t *container) {
-    // Clear any existing content
-    lv_obj_clean(container);
-    
-    if (numSavedNetworks == 0) {
-        lv_obj_t *no_networks_label = lv_label_create(container);
-        lv_label_set_text(no_networks_label, "No saved networks");
-        lv_obj_center(no_networks_label);
-        return;
-    }
-    
-    // Create a list for saved networks
-    saved_networks_list = lv_list_create(container);
-    lv_obj_set_size(saved_networks_list, lv_obj_get_width(container) - 10, lv_obj_get_height(container) - 10);
-    lv_obj_align(saved_networks_list, LV_ALIGN_CENTER, 0, 0);
-    
-    // Add each saved network to the list
-    for (int i = 0; i < numSavedNetworks; i++) {
-        // Create a container for this network entry
-        lv_obj_t *network_item = lv_obj_create(saved_networks_list);
-        lv_obj_set_size(network_item, lv_obj_get_width(saved_networks_list) - 20, 50);
-        lv_obj_set_style_radius(network_item, 5, 0);
-        lv_obj_set_style_pad_all(network_item, 5, 0);
-        lv_obj_set_style_bg_color(network_item, lv_color_hex(savedNetworks[i].active ? 0x004400 : 0x444444), 0);
-        
-        // Add network name
-        lv_obj_t *network_name = lv_label_create(network_item);
-        lv_label_set_text(network_name, savedNetworks[i].ssid);
-        lv_obj_align(network_name, LV_ALIGN_LEFT_MID, 5, 0);
-        
-        // Add connect/disconnect button
-        lv_obj_t *conn_btn = lv_btn_create(network_item);
-        lv_obj_set_size(conn_btn, 100, 30);
-        lv_obj_align(conn_btn, LV_ALIGN_RIGHT_MID, -5, 0);
-        
-        lv_obj_t *conn_label = lv_label_create(conn_btn);
-        if (savedNetworks[i].active) {
-            lv_label_set_text(conn_label, "Disconnect");
-            lv_obj_set_style_bg_color(conn_btn, lv_color_hex(0xFF0000), 0);
-        } else {
-            lv_label_set_text(conn_label, "Connect");
-            lv_obj_set_style_bg_color(conn_btn, lv_color_hex(0x00FF00), 0);
-        }
-        lv_obj_center(conn_label);
-        
-        // Set up event handler for connect/disconnect button
-        int network_idx = i; // Capture the current index for the lambda
-        lv_obj_add_event_cb(conn_btn, [](lv_event_t *e) {
-            int idx = (int)lv_event_get_user_data(e);
-            
-            // Toggle the active state
-            savedNetworks[idx].active = !savedNetworks[idx].active;
-            
-            // If we're activating this network, deactivate all others
-            if (savedNetworks[idx].active) {
-                for (int j = 0; j < numSavedNetworks; j++) {
-                    if (j != idx) {
-                        savedNetworks[j].active = false;
-                    }
-                }
-                
-                // If auto-reconnect is enabled, connect to this network
-                if (wifiReconnectEnabled) {
-                    WiFi.disconnect();
-                    delay(100);
-                    DEBUG_PRINTF("Connecting to network: %s\n", savedNetworks[idx].ssid);
-                    WiFi.begin(savedNetworks[idx].ssid, savedNetworks[idx].password);
-                }
-            } else if (WiFi.status() == WL_CONNECTED) {
-                // If we're deactivating the currently connected network, disconnect
-                WiFi.disconnect();
-                DEBUG_PRINT("Disconnected from WiFi network");
-            }
-            
-            // Save the updated network configuration
-            saveNetworks();
-            
-            // Refresh the display
-            lv_obj_t *container = lv_obj_get_parent(lv_obj_get_parent(lv_obj_get_parent(lv_event_get_target(e))));
-            updateSavedNetworksDisplay(container);
-            
-            // Update WiFi indicator
-            updateWifiIndicator();
-        }, LV_EVENT_CLICKED, (void*)network_idx);
-    }
-    
-    // Add a button to scan for new networks
-    lv_obj_t *scan_btn = lv_btn_create(container);
-    lv_obj_set_size(scan_btn, lv_obj_get_width(container) - 20, 40);
-    lv_obj_align(scan_btn, LV_ALIGN_BOTTOM_MID, 0, -5);
-    lv_obj_set_style_bg_color(scan_btn, lv_color_hex(0x0000FF), 0);
-    
-    lv_obj_t *scan_label = lv_label_create(scan_btn);
-    lv_label_set_text(scan_label, LV_SYMBOL_WIFI " Scan for Networks");
-    lv_obj_center(scan_label);
-    
-    lv_obj_add_event_cb(scan_btn, [](lv_event_t* e) {
-        createWiFiScreen();
-    }, LV_EVENT_CLICKED, NULL);
 }
