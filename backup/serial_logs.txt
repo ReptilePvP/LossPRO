@@ -1,0 +1,246 @@
+# Loss Prevention Log - M5Stack CoreS3 Project
+
+## Required Libraries
+- Wire.h
+- M5Unified.h
+- M5GFX.h
+- lvgl.h
+- ArduinoIoTCloud.h
+- Arduino_ConnectionHandler.h
+- WiFi.h
+
+## Hardware Requirements
+- M5Stack CoreS3
+- M5Stack Dual Button & Key Unit
+
+## Project Structure
+
+### Main Components
+1. **User Interface**
+   - Main Menu
+   - Gender Selection
+   - Color Selection (Shirt, Pants, Shoes)
+   - Item Selection
+   - Confirmation Screen
+   - WiFi Settings Screen
+
+2. **Cloud Integration**
+   - Arduino IoT Cloud connectivity
+   - Real-time data synchronization
+   - Offline data storage capability
+
+### UI Elements
+1. **Screens**
+   - `mainScreen`: Home screen with main options
+   - `genderMenu`: Gender selection menu
+   - `shirtMenu`: Shirt color selection
+   - `pantsMenu`: Pants color selection
+   - `shoeMenu`: Shoe color selection
+   - `itemMenu`: Stolen item selection
+   - `confirmScreen`: Entry confirmation
+   - `wifiScreen`: WiFi settings and network selection
+
+2. **Custom Styles**
+   - Button style with consistent appearance
+   - Scrollable containers with custom scrollbars
+   - Color-coded WiFi signal strength indicators
+
+### Key Functions
+
+#### Screen Creation
+- `createMainMenu()`: Creates the main menu interface
+- `createGenderMenu()`: Displays gender selection options
+- `createColorMenu()`: Generic color selection menu creator
+- `createItemMenu()`: Shows available item options
+- `createConfirmScreen()`: Shows entry confirmation
+- `createWifiScreen()`: WiFi network selection interface
+
+#### WiFi & Cloud
+- `connectWifi()`: Handles WiFi connection process
+- `disconnectWifi()`: Manages WiFi disconnection
+- `updateWifiIndicator()`: Updates WiFi status display
+- `wifiButtonCallback()`: Handles WiFi selection events
+- `wifiConnectCallback()`: Manages connection attempts
+
+#### Data Management
+- `getTimestamp()`: Generates current timestamp
+- `getFormattedEntry()`: Formats entry data
+- `saveEntry()`: Saves entry to Arduino Cloud
+- `initProperties()`: Initializes cloud properties
+
+### Display Configuration
+- Screen dimensions: 320x240 pixels
+- Custom button style with:
+  - Background color: #404040
+  - Border color: #FFFFFF
+  - Border width: 2px
+  - Border radius: 5px
+  - Text color: #FFFFFF
+  - Font: Unscii 16
+
+### Color Options
+Available colors for clothing items:
+```cpp
+const char* colors[] = {
+    "Red", "Blue", "Green",
+    "Yellow", "Black", "White",
+    "Brown", "Gray", "Purple"
+};
+```
+
+### Item Options
+Available items for loss reporting:
+```cpp
+const char* items[] = {
+    "Wallet", "Phone", "Keys",
+    "Bag", "Watch", "Jewelry",
+    "Other"
+};
+```
+
+## Usage Notes
+1. The application requires initial WiFi setup for cloud connectivity
+2. Entries can be made offline and will sync when connected
+3. The UI is optimized for touch interaction
+4. All screens feature a consistent navigation pattern
+5. The WiFi settings screen includes signal strength indicators
+6. The confirmation screen shows a formatted summary of the entry
+
+## Development Notes
+- Touch coordinates are adjusted for screen boundaries
+- Scrolling containers use custom styling for better visibility
+- WiFi connection status is continuously monitored
+- Cloud synchronization can be paused during WiFi configuration
+
+// Arduino Cloud credentials (replace with your own)
+const char DEVICE_LOGIN_NAME[] = "45444c7a-9c6a-42ed-8c94-413e098a2b3d"; // From Arduino Cloud Device setup
+const char SSID[] = "Wack House";                   // Your Wi-Fi SSID
+const char PASS[] = "justice69";              // Your Wi-Fi password
+const char DEVICE_KEY[] = "mIB9Ezs8tfWtqe8Mx2qhQgYxT";      // From Arduino Cloud Device setup
+
+
+
+Detailed Summary & Overview of the Project
+Purpose
+The Loss Prevention Log is a modern, user-friendly application running on the M5Stack CoreS3 (ESP32-S3-based microcontroller with a 320x240 touchscreen). It’s designed to help retail or security staff quickly log potential shoplifting incidents by recording details like gender, clothing colors (shirt, pants, shoes), and items involved. These entries are uploaded to the Arduino IoT Cloud for remote monitoring and analysis, with Wi-Fi connectivity managed directly on the device.
+
+Key Features
+New Entry Creation:
+A step-by-step process to log an incident:
+Gender selection (Male/Female).
+Clothing color selection (Shirt, Pants, Shoes) from 9 options each.
+Item selection from 7 categories (e.g., Jewelry, Shoes).
+Confirmation screen with a formatted preview and save/cancel options.
+Entries are timestamped (if Wi-Fi connected) and sent to the cloud.
+Wi-Fi Settings:
+Displays current Wi-Fi status (connected SSID or "Not Connected").
+Scans and lists nearby networks (up to 10), with scrolling support.
+Allows connecting to a network by entering a password via an on-screen keyboard.
+Disconnect option to switch networks.
+Cloud Integration:
+Uses Arduino IoT Cloud to store and sync log entries remotely.
+Automatically uploads entries when connected, with local logging if offline.
+GUI Design:
+Modern, sleek dark theme (#1E1E1E background) with neon teal (#00C4B4) and magenta (#FF00FF) accents.
+Gradient-filled buttons, bold text, and a scrollable interface for a polished, eye-catching look.
+Optimized for the 320x240 display with touch-friendly layouts.
+How It Works
+Hardware: M5Stack CoreS3 (ESP32-S3, 520KB SRAM, 8MB Flash, 320x240 TFT touchscreen).
+Software: Built with Arduino, LVGL (Light and Versatile Graphics Library), and Arduino IoT Cloud libraries.
+Flow:
+Boot up to the main menu with "New Entry" and "Wi-Fi Settings" buttons.
+"New Entry" guides users through selections, building an entry string (e.g., "Male,Blue,Black,Red,Jewelry").
+"Wi-Fi Settings" manages connectivity, scanning networks and uploading entries to the cloud.
+Use Case: A store employee spots suspicious behavior, logs it via the device, and the data is instantly available in the cloud for management to review.
+Technical Highlights
+LVGL: Handles the GUI with a dark theme, gradients, and scrolling lists.
+Wi-Fi: ESP32-S3’s Wi-Fi stack scans and connects to networks, with robust touch input for password entry.
+Cloud: Arduino IoT Cloud syncs entries using a predefined Thing ID and credentials.
+Memory Management: Optimized to run within the ESP32-S3’s limited SRAM, avoiding crashes seen in earlier iterations.
+User Experience
+Intuitive stepper flow for entries, with large, colorful buttons.
+Sleek Wi-Fi interface with a scrollable network list and clear status feedback.
+Modern aesthetics make it engaging and professional for retail use.
+
+Detailed Reference Guide to the Code
+Key Components
+Libraries:
+<Wire.h>: I2C communication (unused but included by M5Unified).
+<M5Unified.h>: M5Stack hardware abstraction.
+<M5GFX.h>: Graphics driver for the TFT display.
+"lv_conf.h" & <lvgl.h>: LVGL configuration and library for GUI.
+<ArduinoIoTCloud.h> & <Arduino_ConnectionHandler.h>: Cloud connectivity.
+<WiFi.h>: ESP32 Wi-Fi functionality.
+Constants:
+SCREEN_WIDTH (320), SCREEN_HEIGHT (240): Display dimensions.
+MAX_NETWORKS (10): Maximum Wi-Fi networks to display.
+Cloud credentials (DEVICE_LOGIN_NAME, SSID, PASS, DEVICE_KEY): Predefined for Arduino IoT Cloud.
+Global Variables:
+logEntry (String): Stores the current entry for cloud upload.
+cloudPaused (bool): Pauses cloud updates during Wi-Fi settings.
+currentEntry (String): Builds the entry string during creation.
+savedSSIDs (char[MAX_NETWORKS][32]): Stores scanned Wi-Fi SSIDs.
+numNetworks (int): Number of detected networks.
+LVGL objects (mainScreen, genderMenu, etc.): Screen pointers.
+Styles:
+style_screen: Dark gray background (#1E1E1E).
+style_btn: Gradient (gray #4A4A4A to teal #00C4B4), white text, rounded corners.
+style_btn_pressed: Gradient (magenta #FF00FF to teal #00C4B4) for pressed state.
+style_title: Neon teal text (#00C4B4).
+style_text: White text (#FFFFFF).
+Functions
+Setup and Loop:
+setup():
+Initializes M5Stack, LVGL, touch, and cloud.
+Sets up styles and loads the main menu.
+loop():
+Updates M5Stack, cloud (if not paused), Wi-Fi indicator, and LVGL tasks.
+Display and Input:
+my_disp_flush: Renders LVGL graphics to the TFT.
+my_touch_read: Handles touch input (press, drag, release) for navigation and scrolling.
+Main Menu:
+createMainMenu():
+Dark screen with a gray header (#333333).
+Two large buttons ("New Entry", "Wi-Fi Settings") with gradients.
+Wi-Fi indicator in top-right.
+New Entry Flow:
+createGenderMenu():
+Two tall buttons (Male, Female) below a header.
+createColorMenu() / createColorMenuPants() / createColorMenuShoes():
+3x3 grid of color buttons, progressing through shirt, pants, shoes.
+createItemMenu():
+Scrollable list of 7 items below a header.
+createConfirmScreen():
+Preview box with Confirm/Cancel buttons.
+Each step appends to currentEntry (e.g., "Male,Blue,Black,Red,Jewelry").
+Wi-Fi Settings:
+createWifiSettingsScreen():
+Header, status label, scrollable network list, Scan/Back buttons.
+Pauses cloud updates (cloudPaused = true).
+scanWifiCallback(lv_event_t *e):
+Scans Wi-Fi, populates list_cont with up to 10 network buttons.
+Logs button creation and list metrics (height, scroll position).
+wifiButtonCallback(lv_event_t *e):
+Opens a password modal for network connection.
+connectWifiCallback(lv_event_t *e):
+Connects to the selected network, resumes cloud updates.
+Utility Functions:
+updateWifiIndicator(): Updates Wi-Fi status (ON/OFF) with color feedback.
+disconnectWifi(lv_event_t *e): Disconnects Wi-Fi and refreshes settings.
+getFormattedEntry(const String& entry): Formats currentEntry into a readable string.
+getTimestamp(): Returns current time if connected, "NoTime" otherwise.
+saveEntry(const String& entry): Sends entry to the cloud or logs locally.
+Code Structure
+Initialization: setup() sets up hardware, LVGL, and cloud.
+GUI Screens: Each screen function (createMainMenu, createGenderMenu, etc.) builds a new layout, reusing objects where possible with lv_obj_clean.
+Event Handlers: Lambdas and callbacks handle button presses and Wi-Fi actions.
+Data Flow: currentEntry builds incrementally, then saveEntry sends it to the cloud.
+Technical Notes
+Memory: Uses ~200KB of SRAM (out of 520KB), leaving room for stability.
+Scrolling: Enabled with LV_OBJ_FLAG_SCROLLABLE and LV_SCROLLBAR_MODE_ACTIVE in list_cont for Items and Wi-Fi lists.
+Touch: my_touch_read supports drag gestures for scrolling, critical for the Wi-Fi and Item lists.
+Teaching Tips
+Overview: Start with the purpose—logging shoplifting incidents—and show the main menu’s sleek design.
+Demo: Walk through creating a new entry, highlighting the stepper flow and how it builds currentEntry.
+Wi-Fi: Show the settings screen, scan networks, and connect, emphasizing the cloud sync.
+Code: Use the reference guide to explain key functions (e.g., createWifiSettingsScreen, scanWifiCallback), focusing on GUI creation and event handling.
