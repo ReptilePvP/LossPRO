@@ -101,6 +101,12 @@ LV_FONT_DECLARE(lv_font_montserrat_20);
 static const uint32_t screenTickPeriod = 10;  // Increased to 10ms for better stability
 static uint32_t lastLvglTick = 0;
 
+// For log pagination
+static std::vector<String> logEntries;
+static int currentLogPage = 0;
+static int totalLogPages = 0;
+static const int LOGS_PER_PAGE = 8;
+
 // Status bar
 static lv_obj_t* status_bar = nullptr;
 
@@ -126,6 +132,17 @@ const char DEFAULT_PASS[] = "justice69";
 struct WifiNetwork {
     char ssid[33];
     char password[65];
+};
+
+// Struct to hold pagination callback data
+struct LogPageData {
+    lv_obj_t* container;
+    lv_obj_t* page_label;
+    int* current_page;
+    int total_pages;
+    std::vector<String>* log_entries;
+    lv_obj_t* prev_btn;  // Added to track Prev button
+    lv_obj_t* next_btn;  // Added to track Next button
 };
 
 static WifiNetwork savedNetworks[MAX_NETWORKS];
@@ -337,6 +354,37 @@ void initFileSystem() {
     SPI.begin();
     pinMode(TFT_DC, OUTPUT);
     digitalWrite(TFT_DC, HIGH);
+}
+// Callback function for pagination buttons
+static void log_page_event_cb(lv_event_t* e) {
+    LogPageData* data = static_cast<LogPageData*>(lv_event_get_user_data(e));
+    lv_obj_t* btn = lv_event_get_target(e);
+
+    if (btn == nullptr || data == nullptr) {
+        DEBUG_PRINT("Event callback: Invalid button or data");
+        return;
+    }
+
+    int new_page = *data->current_page;
+    if (btn == data->prev_btn) {  // Prev button
+        if (new_page > 0) {
+            new_page--;
+            DEBUG_PRINTF("Prev pressed, moving to page %d\n", new_page + 1);
+        }
+    } else if (btn == data->next_btn) {  // Next button
+        if (new_page < data->total_pages - 1) {
+            new_page++;
+            DEBUG_PRINTF("Next pressed, moving to page %d\n", new_page + 1);
+        }
+    }
+
+    if (new_page != *data->current_page) {
+        *data->current_page = new_page;
+        DEBUG_PRINTF("Switching to page %d of %d\n", new_page + 1, data->total_pages);
+        loadLogPage(data->container, data->page_label, new_page, *data->log_entries, data->total_pages);
+    } else {
+        DEBUG_PRINT("Page change ignored: already at boundary");
+    }
 }
 
 void setup() {
@@ -2173,9 +2221,7 @@ void createWiFiManagerScreen() {
     lv_obj_set_size(saved_networks_list, SCREEN_WIDTH - 20, SCREEN_HEIGHT - 120);
     lv_obj_align(saved_networks_list, LV_ALIGN_TOP_MID, 0, 80);
     lv_obj_set_style_bg_color(saved_networks_list, lv_color_hex(0x2D2D2D), 0);
-    lv_obj_set_scrollbar_mode(saved_networks_list, LV_SCROLLBAR_MODE_ACTIVE);
-    lv_obj_add_flag(saved_networks_list, LV_OBJ_FLAG_SCROLLABLE);
-
+    
     // Populate saved networks
     if (numSavedNetworks == 0) {
         lv_obj_t* no_networks_label = lv_label_create(saved_networks_list);
@@ -2521,187 +2567,262 @@ bool appendToLog(const String& entry) {
 }
 
 void createViewLogsScreen() {
-    lv_obj_t* logs_screen = lv_obj_create(NULL); // Local variable, no static
-    lv_obj_set_style_bg_color(logs_screen, lv_color_hex(0x000000), 0);
-    
-    // Create header
+    DEBUG_PRINT("Creating new view logs screen");
+
+    // Create the screen
+    lv_obj_t* logs_screen = lv_obj_create(NULL);
+    lv_obj_add_style(logs_screen, &style_screen, 0);
+
+    // Add WiFi and Battery indicators
+    addWifiIndicator(logs_screen);
+    addBatteryIndicator(logs_screen);
+
+    // Header
     lv_obj_t* header = lv_obj_create(logs_screen);
     lv_obj_set_size(header, SCREEN_WIDTH, 40);
-    lv_obj_align(header, LV_ALIGN_TOP_MID, 0, 0);
-    lv_obj_set_style_bg_color(header, lv_color_hex(0x222222), 0);
-    lv_obj_set_style_border_width(header, 0, 0);
-    lv_obj_set_style_radius(header, 0, 0);
-    
+    lv_obj_set_pos(header, 0, 0);
+    lv_obj_set_style_bg_color(header, lv_color_hex(0x333333), 0);
     lv_obj_t* title = lv_label_create(header);
-    lv_label_set_text(title, "Saved Logs");
-    lv_obj_align(title, LV_ALIGN_CENTER, 0, 0);
-    lv_obj_set_style_text_font(title, &lv_font_montserrat_20, 0);
-    
-    // Create back button
+    lv_label_set_text(title, "Log Entries");
+    lv_obj_add_style(title, &style_title, 0);
+    lv_obj_center(title);
+
+    // Log container (non-scrollable)
+    lv_obj_t* log_container = lv_obj_create(logs_screen);
+    lv_obj_set_size(log_container, SCREEN_WIDTH - 20, 120);
+    lv_obj_set_pos(log_container, 10, 50);
+    lv_obj_set_style_bg_color(log_container, lv_color_hex(0x2D2D2D), 0);
+    lv_obj_set_style_border_width(log_container, 1, 0);
+    lv_obj_set_style_border_color(log_container, lv_color_hex(0x555555), 0);
+    lv_obj_set_style_pad_all(log_container, 5, 0);
+    lv_obj_clear_flag(log_container, LV_OBJ_FLAG_SCROLLABLE);
+
+    // Pagination controls
+    lv_obj_t* page_label = lv_label_create(logs_screen);
+    lv_obj_align(page_label, LV_ALIGN_BOTTOM_MID, 0, -10);
+    lv_obj_add_style(page_label, &style_text, 0);
+    lv_obj_move_foreground(page_label);
+
+    lv_obj_t* prev_btn = lv_btn_create(logs_screen);
+    lv_obj_set_size(prev_btn, 40, 40);
+    lv_obj_align(prev_btn, LV_ALIGN_BOTTOM_LEFT, 20, -10);
+    lv_obj_add_style(prev_btn, &style_btn, 0);
+    lv_obj_add_style(prev_btn, &style_btn_pressed, LV_STATE_PRESSED);
+    lv_obj_t* prev_label = lv_label_create(prev_btn);
+    lv_label_set_text(prev_label, LV_SYMBOL_LEFT);
+    lv_obj_center(prev_label);
+    lv_obj_move_foreground(prev_btn);
+
+    lv_obj_t* next_btn = lv_btn_create(logs_screen);
+    lv_obj_set_size(next_btn, 40, 40);
+    lv_obj_align(next_btn, LV_ALIGN_BOTTOM_RIGHT, -20, -10);
+    lv_obj_add_style(next_btn, &style_btn, 0);
+    lv_obj_add_style(next_btn, &style_btn_pressed, LV_STATE_PRESSED);
+    lv_obj_t* next_label = lv_label_create(next_btn);
+    lv_label_set_text(next_label, LV_SYMBOL_RIGHT);
+    lv_obj_center(next_label);
+    lv_obj_move_foreground(next_btn);
+
+    // Back button
     lv_obj_t* back_btn = lv_btn_create(logs_screen);
     lv_obj_set_size(back_btn, 80, 40);
-    lv_obj_align(back_btn, LV_ALIGN_BOTTOM_LEFT, 10, -10);
-    lv_obj_set_style_bg_color(back_btn, lv_color_hex(0x2222CC), 0);
-    lv_obj_set_style_bg_color(back_btn, lv_color_hex(0x1111AA), LV_STATE_PRESSED);
-    
+    lv_obj_align(back_btn, LV_ALIGN_BOTTOM_LEFT, 10, -60);
+    lv_obj_add_style(back_btn, &style_btn, 0);
+    lv_obj_add_style(back_btn, &style_btn_pressed, LV_STATE_PRESSED);
     lv_obj_t* back_label = lv_label_create(back_btn);
     lv_label_set_text(back_label, LV_SYMBOL_LEFT " Back");
     lv_obj_center(back_label);
-    lv_obj_add_event_cb(back_btn, [](lv_event_t* e) {
-        DEBUG_PRINT("Logs Screen Back button pressed");
-        lv_obj_t* current_screen = lv_scr_act();
-        if (current_screen && lv_obj_is_valid(current_screen)) {
-            DEBUG_PRINT("Deleting logs screen before returning to main menu");
-            lv_obj_del_async(current_screen); // Defer deletion
-        }
-        lv_timer_handler(); // Process pending LVGL tasks
-        delay(10); // Small delay to stabilize
-        createMainMenu();
-    }, LV_EVENT_CLICKED, NULL);
-    
-    // Create container for logs
-    lv_obj_t* container = lv_obj_create(logs_screen);
-    lv_obj_set_size(container, SCREEN_WIDTH - 20, SCREEN_HEIGHT - 100);
-    lv_obj_align(container, LV_ALIGN_TOP_MID, 0, 50);
-    lv_obj_set_style_bg_color(container, lv_color_hex(0x111111), 0);
-    lv_obj_set_style_border_color(container, lv_color_hex(0x444444), 0);
-    lv_obj_set_style_border_width(container, 1, 0);
-    lv_obj_set_style_pad_all(container, 5, 0);
-    lv_obj_add_flag(container, LV_OBJ_FLAG_SCROLL_MOMENTUM | LV_OBJ_FLAG_SCROLLABLE);
-    current_scroll_obj = container;
-    //
-    lv_obj_t* logs_label = lv_label_create(container);
-    lv_obj_set_width(logs_label, 280);
-    lv_obj_set_style_text_color(logs_label, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_set_style_text_font(logs_label, &lv_font_montserrat_14, 0);
-    
-    // Attempt to initialize file system if not already initialized
+    lv_obj_move_foreground(back_btn);
+
+    // Load and display logs
+    std::vector<String> log_entries;
+    int total_pages = 0;
+
     if (!fileSystemInitialized) {
-        DEBUG_PRINT("File system not initialized, attempting to initialize for log viewing");
+        DEBUG_PRINT("Filesystem not initialized, attempting to initialize");
         initFileSystem();
     }
-    
-    // Check if file system is available
-    if (!fileSystemInitialized) {
-        lv_label_set_text(logs_label, "Error: Storage system unavailable");
-    } else {
-        // Switch to SD card mode
+
+    if (fileSystemInitialized) {
+        DEBUG_PRINT("Switching to SD SPI mode");
         SPI.end();
         delay(100);
-        SPI_SD.begin(SD_SPI_SCK_PIN, SD_SPI_MISO_PIN, SD_SPI_MOSI_PIN, -1); // -1 means no default CS
-        pinMode(SD_SPI_CS_PIN, OUTPUT); // Set CS pin (4) as OUTPUT
-        digitalWrite(SD_SPI_CS_PIN, HIGH); // Deselect SD card (HIGH = off)
+        SPI_SD.begin(SD_SPI_SCK_PIN, SD_SPI_MISO_PIN, SD_SPI_MOSI_PIN, SD_SPI_CS_PIN);
+        digitalWrite(SD_SPI_CS_PIN, HIGH);
         delay(100);
-        
+
         if (!SD.exists(LOG_FILENAME)) {
-            lv_label_set_text(logs_label, "No logs found");
-        } else {
-            File file = SD.open(LOG_FILENAME, FILE_READ);
-            if (!file) {
-                lv_label_set_text(logs_label, "Error: Failed to open log file");
-            } else {
-                String logs = "";
-                size_t fileSize = file.size();
-                
-                // If file is very large, only read the last portion to avoid memory issues
-                const size_t MAX_LOG_SIZE = 8192; // 8KB max
-                if (fileSize > MAX_LOG_SIZE) {
-                    DEBUG_PRINTF("Log file is large (%d bytes), reading last %d bytes\n", 
-                                 fileSize, MAX_LOG_SIZE);
-                    if (file.seek(fileSize - MAX_LOG_SIZE)) {
-                        file.readStringUntil('\n'); // Align with complete entries
-                        logs = "... (older logs not shown) ...\n\n";
-                    } else {
-                        DEBUG_PRINT("Failed to seek in log file");
-                        logs = "Error: Failed to read large log file\n";
-                    }
-                }
-                
-                while (file.available()) {
-                    logs += file.readStringUntil('\n') + "\n";
-                }
+            DEBUG_PRINT("Log file does not exist");
+            File file = SD.open(LOG_FILENAME, FILE_WRITE);
+            if (file) {
+                file.println("# Loss Prevention Log - Created " + getTimestamp());
                 file.close();
-                
-                if (logs.length() == 0) {
-                    lv_label_set_text(logs_label, "No logs found");
-                } else {
-                    lv_label_set_text(logs_label, logs.c_str());
-                }
+                DEBUG_PRINT("Created new log file");
+            } else {
+                DEBUG_PRINT("Failed to create log file");
             }
         }
-        
-        // Switch back to LCD mode
+
+        File log_file = SD.open(LOG_FILENAME, FILE_READ);
+        if (!log_file) {
+            DEBUG_PRINT("Failed to open log file for reading");
+            lv_obj_t* error_label = lv_label_create(log_container);
+            lv_label_set_text(error_label, "Failed to open log file");
+            lv_obj_add_style(error_label, &style_text, 0);
+            lv_obj_center(error_label);
+        } else {
+            DEBUG_PRINT("Reading log file...");
+            while (log_file.available()) {
+                String line = log_file.readStringUntil('\n');
+                line.trim();
+                if (line.length() > 0) {
+                    log_entries.push_back(line);
+                    DEBUG_PRINTF("Read entry: %s\n", line.c_str());
+                }
+            }
+            log_file.close();
+            DEBUG_PRINTF("Read %d log entries from file\n", log_entries.size());
+
+            if (log_entries.empty()) {
+                DEBUG_PRINT("No entries found in log file");
+                lv_obj_t* no_logs_label = lv_label_create(log_container);
+                lv_label_set_text(no_logs_label, "No log entries found");
+                lv_obj_add_style(no_logs_label, &style_text, 0);
+                lv_obj_center(no_logs_label);
+                lv_obj_move_foreground(no_logs_label);
+            }
+        }
+
+        DEBUG_PRINT("Switching back to LCD SPI mode");
         SPI_SD.end();
         SPI.begin();
         pinMode(TFT_DC, OUTPUT);
         digitalWrite(TFT_DC, HIGH);
+    } else {
+        DEBUG_PRINT("Filesystem initialization failed");
+        lv_obj_t* error_label = lv_label_create(log_container);
+        lv_label_set_text(error_label, "Storage not initialized");
+        lv_obj_add_style(error_label, &style_text, 0);
+        lv_obj_center(error_label);
+        lv_obj_move_foreground(error_label);
     }
-    
-    // Create clear button
-    lv_obj_t* clear_btn = lv_btn_create(logs_screen);
-    lv_obj_set_size(clear_btn, 80, 40);
-    lv_obj_align(clear_btn, LV_ALIGN_BOTTOM_RIGHT, -10, -10);
-    lv_obj_set_style_bg_color(clear_btn, lv_color_hex(0xCC3333), 0);
-    lv_obj_set_style_bg_color(clear_btn, lv_color_hex(0xAA2222), LV_STATE_PRESSED);
-    
-    lv_obj_t* clear_label = lv_label_create(clear_btn);
-    lv_label_set_text(clear_label, "Clear");
-    lv_obj_center(clear_label);
-    
-    lv_obj_add_event_cb(clear_btn, [](lv_event_t* e) {
-        // Create a confirmation dialog
-        static const char* btns[] = {"Yes", "No", ""};
-        lv_obj_t* confirm = lv_msgbox_create(NULL, "Confirm", "Clear all logs?", btns, true);
-        lv_obj_set_size(confirm, 200, 120);
-        lv_obj_center(confirm);
-        
-        lv_obj_add_event_cb(confirm, [](lv_event_t* e) {
-            lv_obj_t* msgbox = (lv_obj_t*)lv_event_get_current_target(e);
-            const char* btn_text = lv_msgbox_get_active_btn_text(msgbox);
-            
-            if (btn_text && strcmp(btn_text, "Yes") == 0) {
-                // Switch to SD card mode
-                SPI.end();
-                delay(100);
-                SPI_SD.begin(SD_SPI_SCK_PIN, SD_SPI_MISO_PIN, SD_SPI_MOSI_PIN, -1); // -1 means no default CS
-                pinMode(SD_SPI_CS_PIN, OUTPUT); // Set CS pin (4) as OUTPUT
-                digitalWrite(SD_SPI_CS_PIN, HIGH); // Deselect SD card (HIGH = off)
-                delay(100);
-                
-                if (SD.exists(LOG_FILENAME)) {
-                    if (SD.remove(LOG_FILENAME)) {
-                        println_log("Log file cleared");
-                        
-                        // Create a new empty log file
-                        File logFile = SD.open(LOG_FILENAME, FILE_WRITE);
-                        if (logFile) {
-                            logFile.println("# Loss Prevention Log - Created " + getTimestamp());
-                            logFile.close();
-                        }
-                        
-                        // Refresh the screen
-                        createViewLogsScreen();
-                    } else {
-                        println_log("Failed to clear log file");
-                        lv_obj_t* error = lv_msgbox_create(NULL, "Error", 
-                            "Failed to clear log file", NULL, true);
-                        lv_obj_set_size(error, 200, 120);
-                        lv_obj_center(error);
-                    }
-                }
-                
-                // Switch back to LCD mode
-                SPI_SD.end();
-                SPI.begin();
-                pinMode(TFT_DC, OUTPUT);
-                digitalWrite(TFT_DC, HIGH);
-            }
-            
-            lv_msgbox_close(msgbox);
-        }, LV_EVENT_VALUE_CHANGED, NULL);
-    }, LV_EVENT_CLICKED, NULL);
-    
+
+    // Calculate total pages (4 entries per page)
+    total_pages = log_entries.empty() ? 1 : (log_entries.size() + 3) / 4;
+    DEBUG_PRINTF("Total pages calculated: %d\n", total_pages);
+
+    // Dynamically allocate current_page
+    int* current_page = new int(0);
+
+    // Initial display
+    if (!log_entries.empty()) {
+        loadLogPage(log_container, page_label, *current_page, log_entries, total_pages);
+    } else {
+        char pageText[16];
+        snprintf(pageText, sizeof(pageText), "1/1");
+        lv_label_set_text(page_label, pageText);
+    }
+
+    // Set up pagination callback data
+    LogPageData* page_data = new LogPageData{
+        log_container,
+        page_label,
+        current_page,
+        total_pages,
+        &log_entries,
+        prev_btn,
+        next_btn
+    };
+
+    // Add event callbacks
+    lv_obj_add_event_cb(prev_btn, log_page_event_cb, LV_EVENT_CLICKED, page_data);
+    lv_obj_add_event_cb(next_btn, log_page_event_cb, LV_EVENT_CLICKED, page_data);
+    lv_obj_add_event_cb(back_btn, [](lv_event_t* e) {
+        LogPageData* data = static_cast<LogPageData*>(lv_event_get_user_data(e));
+        if (data) {
+            delete data->current_page;
+            delete data;
+        }
+        DEBUG_PRINT("Returning to main menu from logs");
+        createMainMenu();
+    }, LV_EVENT_CLICKED, page_data);
+
+    // Load the screen
     lv_scr_load(logs_screen);
+    lv_timer_handler();
+    DEBUG_PRINT("View logs screen created successfully");
+}
+
+void loadLogPage(lv_obj_t* container, lv_obj_t* pageLabel, int page, const std::vector<String>& logEntries, int totalPages) {
+    DEBUG_PRINTF("Loading log page %d\n", page);
+    
+    // Clear existing content
+    lv_obj_clean(container);
+    
+    // Check if there are any logs to display
+    if (logEntries.empty()) {
+        DEBUG_PRINT("No log entries provided");
+        lv_obj_t* no_logs_label = lv_label_create(container);
+        lv_label_set_text(no_logs_label, "No logs found");
+        lv_obj_add_style(no_logs_label, &style_text, 0);
+        lv_obj_set_style_text_color(no_logs_label, lv_color_hex(0xFF5555), 0);
+        lv_obj_center(no_logs_label);
+        lv_obj_move_foreground(no_logs_label);
+        lv_label_set_text(pageLabel, "1/1");
+        lv_obj_invalidate(container);
+        return;
+    }
+
+    // Calculate pagination (4 entries per page)
+    const int ENTRIES_PER_PAGE = 4;
+    int startIdx = page * ENTRIES_PER_PAGE;
+    int endIdx = min(startIdx + ENTRIES_PER_PAGE, static_cast<int>(logEntries.size()));
+    int y_pos = 0;
+
+    DEBUG_PRINTF("Displaying entries %d to %d of %d\n", startIdx, endIdx - 1, logEntries.size());
+
+    // Create entries (fixed at 4 per page)
+    for (int i = startIdx; i < endIdx; i++) {
+        // Background for each entry
+        lv_obj_t* entry_bg = lv_obj_create(container);
+        if (!entry_bg) {
+            DEBUG_PRINT("Failed to create entry background");
+            continue;
+        }
+        lv_obj_set_size(entry_bg, SCREEN_WIDTH - 30, 25);
+        lv_obj_set_pos(entry_bg, 5, y_pos);
+        lv_obj_set_style_bg_color(entry_bg, lv_color_hex(0x3A3A3A), 0);
+        lv_obj_set_style_border_width(entry_bg, 0, 0);
+        lv_obj_set_style_pad_all(entry_bg, 2, 0);
+        lv_obj_move_foreground(entry_bg);
+
+        // Log text
+        lv_obj_t* entry_label = lv_label_create(entry_bg);
+        if (!entry_label) {
+            DEBUG_PRINT("Failed to create entry label");
+            continue;
+        }
+        const char* entry_text = logEntries[i].c_str();
+        lv_label_set_text(entry_label, entry_text[0] ? entry_text : "[Empty]");
+        lv_obj_add_style(entry_label, &style_text, 0);
+        lv_obj_set_width(entry_label, SCREEN_WIDTH - 40);
+        lv_obj_align(entry_label, LV_ALIGN_LEFT_MID, 5, 0);
+        lv_obj_set_style_text_opa(entry_label, LV_OPA_COVER, 0);
+        lv_obj_move_foreground(entry_label);
+
+        DEBUG_PRINTF("Added entry %d at y=%d: %s\n", i, y_pos, logEntries[i].substring(0, 30).c_str());
+        y_pos += 30;
+    }
+
+    // Update page label
+    char pageText[16];
+    snprintf(pageText, sizeof(pageText), "%d/%d", page + 1, totalPages);
+    lv_label_set_text(pageLabel, pageText);
+
+    // Refresh display
+    lv_obj_invalidate(container);
+    lv_timer_handler();
+    DEBUG_PRINT("Log page loaded successfully");
 }
 
 void initStyles() {
@@ -2951,6 +3072,7 @@ void connectToSavedNetworks() {
         DEBUG_PRINT("Could not connect to any saved networks");
     }
 }
+
 void saveEntry(const String& entry) {
     Serial.println("New Entry:");
     Serial.println(entry);
