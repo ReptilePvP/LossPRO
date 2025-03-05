@@ -164,6 +164,16 @@ static int numSavedNetworks = 0;
 static bool wifiConfigured = false;
 bool manualDisconnect = false; // Flag to track if disconnection was user-initiated
 
+// Touch tracking inspired by touch.ino
+static bool touch_active = false;
+static int16_t touch_start_x = 0;
+static int16_t touch_start_y = 0;
+static int16_t touch_last_x = 0;
+static int16_t touch_last_y = 0;
+static unsigned long touch_start_time = 0;
+const int TOUCH_SWIPE_THRESHOLD = 30;  // Pixels for a swipe
+const int TOUCH_MAX_SWIPE_TIME = 700;  // Max time (ms) for a swipe
+
 // Menu options
 const char* genders[] = {"Male", "Female"};
 
@@ -378,24 +388,16 @@ void setup() {
     
     // Initialize M5Stack with specific config
     auto cfg = M5.config();
-    cfg.clear_display = true;
     cfg.output_power = true;
-    cfg.internal_imu = false;
-    cfg.internal_rtc = false;
-    
     CoreS3.begin(cfg);
-
-    CoreS3.Power.setChargeCurrent(600);
-    DEBUG_PRINT("CoreS3 initialized");
+    CoreS3.Power.begin();
+    CoreS3.Power.setBatteryCharge(true); // Ensure battery mode is active
+    CoreS3.Power.setChargeCurrent(1000);
+    DEBUG_PRINT("CoreS3 initialized with touch support");
     
     CoreS3.Display.setBrightness(255);
     CoreS3.Display.clear();
     DEBUG_PRINT("Display configured");
-
-    // Add battery status check
-    DEBUG_PRINTF("Battery Voltage: %f V\n", CoreS3.Power.getBatteryVoltage());
-    DEBUG_PRINTF("Is Charging: %d\n", CoreS3.Power.isCharging());
-    DEBUG_PRINTF("Battery Level: %d%%\n", CoreS3.Power.getBatteryLevel());
 
     // Initialize LVGL
     lv_init();
@@ -437,6 +439,9 @@ void setup() {
         syncTimeWithNTP();
     }
     
+    DEBUG_PRINTF("Battery Voltage: %f V\n", CoreS3.Power.getBatteryVoltage());
+    DEBUG_PRINTF("Is Charging: %d\n", CoreS3.Power.isCharging());
+    DEBUG_PRINTF("Battery Level: %d%%\n", CoreS3.Power.getBatteryLevel());
     DEBUG_PRINTF("Free heap after setup: %u bytes\n", ESP.getFreeHeap());
     DEBUG_PRINT("Setup complete!");
 }
@@ -451,12 +456,57 @@ void loop() {
         lastLvglTick = currentMillis;
     }
 
+    // Touch handling inspired by touch.ino
+    m5::touch_detail_t t = CoreS3.Touch.getDetail();
+    if (t.state == m5::touch_state_t::touch && !touch_active) {
+        // Touch began
+        touch_active = true;
+        touch_start_x = t.x;
+        touch_start_y = t.y;
+        touch_last_x = t.x;
+        touch_last_y = t.y;
+        touch_start_time = currentMillis;
+        DEBUG_PRINTF("Touch began at (%d, %d)\n", t.x, t.y);
+    } else if (t.state == m5::touch_state_t::touch && touch_active) {
+        // Touch moving
+        touch_last_x = t.x;
+        touch_last_y = t.y;
+        DEBUG_PRINTF("Touch moving to (%d, %d)\n", t.x, t.y);
+    } else if (t.state == m5::touch_state_t::none && touch_active) {
+        // Touch ended
+        touch_active = false;
+        int dx = touch_last_x - touch_start_x;
+        int dy = touch_last_y - touch_start_y;
+        int abs_dx = abs(dx);
+        int abs_dy = abs(dy);
+        unsigned long touch_duration = currentMillis - touch_start_time;
+
+        DEBUG_PRINTF("Touch ended: dx=%d, dy=%d, duration=%lu ms\n", dx, dy, touch_duration);
+
+        if (touch_duration < TOUCH_MAX_SWIPE_TIME) {
+            if (abs_dx > TOUCH_SWIPE_THRESHOLD && abs_dx > abs_dy) {
+                if (dx < 0) {
+                    DEBUG_PRINT("Swipe left detected");
+                    handleSwipeLeft();
+                }
+            } else if (abs_dy > TOUCH_SWIPE_THRESHOLD && abs_dy > abs_dx) {
+                if (dy < 0) {
+                    DEBUG_PRINT("Swipe up detected");
+                    handleSwipeVertical(-SCROLL_AMOUNT);
+                } else {
+                    DEBUG_PRINT("Swipe down detected");
+                    handleSwipeVertical(SCROLL_AMOUNT);
+                }
+            }
+        }
+    }
+
     // Update indicators periodically
     static unsigned long lastIndicatorUpdate = 0;
-    if (millis() - lastIndicatorUpdate > 5000) {  // Update every 5 seconds
+    if (currentMillis - lastIndicatorUpdate > 5000) {
         updateWifiIndicator();
         updateBatteryIndicator();
-        lastIndicatorUpdate = millis();
+        lastIndicatorUpdate = currentMillis;
     }
     
     // Check for WiFi scan timeout
@@ -526,18 +576,68 @@ void my_disp_flush(lv_disp_drv_t *disp, const lv_area_t *area, lv_color_t *color
     lv_disp_flush_ready(disp);
 }
 
+// Simplified my_touchpad_read for LVGL compatibility
 void my_touchpad_read(lv_indev_drv_t *indev_driver, lv_indev_data_t *data) {
-    auto t = CoreS3.Touch.getDetail();
+    m5::touch_detail_t t = CoreS3.Touch.getDetail();
     if (t.state == m5::touch_state_t::touch) {
         data->state = LV_INDEV_STATE_PR;
         data->point.x = t.x;
-        data->point.y = t.y; // Apply vertical offset to fix alignment
-        
-        // Debug the coordinates if needed
-        DEBUG_PRINTF("Touch: (%d, %d) → adjusted to (%d, %d)\n", 
-            t.x, t.y, data->point.x, data->point.y);
+        data->point.y = t.y;
     } else {
         data->state = LV_INDEV_STATE_REL;
+    }
+}
+
+void handleSwipeLeft() {
+    lv_obj_t* current_screen = lv_scr_act();
+    
+    if (current_screen == wifi_screen) {
+        DEBUG_PRINT("Swiping back to WiFi Manager from WiFi Screen");
+        cleanupWiFiResources();
+        lv_obj_t* screen_to_delete = wifi_screen;
+        wifi_screen = nullptr;
+        if (screen_to_delete != nullptr) {
+            lv_obj_del(screen_to_delete);
+        }
+        createWiFiManagerScreen();
+    } else if (current_screen == wifi_manager_screen) {
+        DEBUG_PRINT("Swiping back to main menu from WiFi Manager");
+        createMainMenu();
+    } else if (current_screen == genderMenu) {
+        DEBUG_PRINT("Swiping back to main menu from gender menu");
+        createMainMenu();
+    } else if (current_screen == colorMenu) {
+        if (shoes_next_btn != nullptr) {
+            DEBUG_PRINT("Swiping back to pants menu from shoes menu");
+            createColorMenuPants();
+        } else if (pants_next_btn != nullptr) {
+            DEBUG_PRINT("Swiping back to shirt menu from pants menu");
+            createColorMenuShirt();
+        } else {
+            DEBUG_PRINT("Swiping back to gender menu from shirt menu");
+            createGenderMenu();
+        }
+    } else if (current_screen == itemMenu) {
+        DEBUG_PRINT("Swiping back to shoes menu from item menu");
+        createColorMenuShoes();
+    } else if (current_screen == confirmScreen) {
+        DEBUG_PRINT("Swiping back to item menu from confirm screen");
+        createItemMenu();
+    }
+
+    if (current_screen && current_screen != lv_scr_act()) {
+        DEBUG_PRINTF("Cleaning old screen: %p\n", current_screen);
+        lv_obj_del_async(current_screen);
+    }
+}
+
+void handleSwipeVertical(int amount) {
+    if (current_scroll_obj && lv_obj_is_valid(current_scroll_obj)) {
+        lv_obj_scroll_by(current_scroll_obj, 0, amount, LV_ANIM_ON);
+        DEBUG_PRINTF("Scrolled %p by %d pixels\n", current_scroll_obj, amount);
+        lv_obj_invalidate(current_scroll_obj); // Force UI refresh
+    } else {
+        DEBUG_PRINT("No valid scrollable object");
     }
 }
 
@@ -2392,7 +2492,7 @@ void createWiFiManagerScreen() {
 
 void createWiFiScreen() {
     if (wifi_screen) {
-        cleanupWiFiResources(); // Clean up resources before deleting the screen
+        cleanupWiFiResources();
         lv_obj_del(wifi_screen);
         wifi_screen = nullptr;
     }
@@ -2419,12 +2519,17 @@ void createWiFiScreen() {
     lv_obj_align(wifi_status_label, LV_ALIGN_TOP_MID, 0, 60);
     lv_label_set_text(wifi_status_label, "Scanning for networks...");
     
-    // WiFi list
+    // WiFi list - Make scrollable
     wifi_list = lv_list_create(wifi_screen);
-    lv_obj_set_size(wifi_list, SCREEN_WIDTH - 20, SCREEN_HEIGHT - 120);
+    lv_obj_set_size(wifi_list, SCREEN_WIDTH - 20, SCREEN_HEIGHT - 120); // 120px height
     lv_obj_align(wifi_list, LV_ALIGN_TOP_MID, 0, 80);
     lv_obj_set_style_bg_color(wifi_list, lv_color_hex(0x2D2D2D), 0);
-    
+    lv_obj_set_scroll_dir(wifi_list, LV_DIR_VER);
+    lv_obj_set_scrollbar_mode(wifi_list, LV_SCROLLBAR_MODE_AUTO);
+    lv_obj_add_flag(wifi_list, LV_OBJ_FLAG_SCROLLABLE);
+    current_scroll_obj = wifi_list; // Set as scrollable object
+    DEBUG_PRINTF("WiFi list created at %p, set as current_scroll_obj\n", wifi_list);
+
     // Refresh button
     lv_obj_t* refresh_btn = lv_btn_create(wifi_screen);
     lv_obj_align(refresh_btn, LV_ALIGN_BOTTOM_RIGHT, -10, -10);
@@ -2530,7 +2635,8 @@ bool appendToLog(const String& entry) {
         return false;
     }
     
-    String formattedEntry = getTimestamp() + ": " + entry; // Should be "YYYY-MM-DD HH:MM:SS: Gender:...,Shirt:..."
+    // Write single-line CSV: "YYYY-MM-DD HH:MM:SS: Gender:...,Shirt:..."
+    String formattedEntry = getTimestamp() + ": " + entry;
     size_t bytesWritten = file.println(formattedEntry);
     file.close();
     
@@ -2551,18 +2657,14 @@ bool appendToLog(const String& entry) {
 void createViewLogsScreen() {
     DEBUG_PRINT("Creating new view logs screen");
 
-    // Clear previous log entries to ensure fresh data
     parsedLogEntries.clear();
 
-    // Create the screen
     lv_obj_t* logs_screen = lv_obj_create(NULL);
     lv_obj_add_style(logs_screen, &style_screen, 0);
 
-    // Add WiFi and Battery indicators
     addWifiIndicator(logs_screen);
     addBatteryIndicator(logs_screen);
 
-    // Header
     lv_obj_t* header = lv_obj_create(logs_screen);
     lv_obj_set_size(header, SCREEN_WIDTH, 40);
     lv_obj_set_pos(header, 0, 0);
@@ -2572,22 +2674,19 @@ void createViewLogsScreen() {
     lv_obj_add_style(title, &style_title, 0);
     lv_obj_center(title);
 
-    // Tab view
     lv_obj_t* tabview = lv_tabview_create(logs_screen, LV_DIR_TOP, 30);
     lv_obj_set_size(tabview, SCREEN_WIDTH, SCREEN_HEIGHT - 40);
     lv_obj_align(tabview, LV_ALIGN_BOTTOM_MID, 0, 0);
     lv_obj_set_style_bg_color(tabview, lv_color_hex(0x2D2D2D), 0);
 
-    // Get current time and ensure it’s synced
     time_t now;
     time(&now);
-    if (WiFi.status() == WL_CONNECTED) syncTimeWithNTP(); // Force time sync if connected
+    if (WiFi.status() == WL_CONNECTED) syncTimeWithNTP();
     struct tm* timeinfo = localtime(&now);
     char current_time[20];
     strftime(current_time, sizeof(current_time), "%Y-%m-%d %H:%M:%S", timeinfo);
     DEBUG_PRINTF("Current system time: %s\n", current_time);
 
-    // Load and parse logs
     if (!fileSystemInitialized) {
         DEBUG_PRINT("Filesystem not initialized, attempting to initialize");
         initFileSystem();
@@ -2615,11 +2714,11 @@ void createViewLogsScreen() {
             while (log_file.available()) {
                 String line = log_file.readStringUntil('\n');
                 line.trim();
-                if (line.length() > 0) {
+                if (line.length() > 0 && !line.startsWith("#")) {
                     time_t timestamp = parseTimestamp(line);
                     if (timestamp != 0) {
                         parsedLogEntries.push_back({line, timestamp});
-                        DEBUG_PRINTF("Parsed entry: %s\n", line.substring(0, 50).c_str());
+                        DEBUG_PRINTF("Parsed entry: %s\n", line.c_str());
                     } else {
                         DEBUG_PRINTF("Failed to parse timestamp: %s\n", line.c_str());
                     }
@@ -2635,33 +2734,28 @@ void createViewLogsScreen() {
         SPI.begin();
         pinMode(TFT_DC, OUTPUT);
         digitalWrite(TFT_DC, HIGH);
-    } else {
-        DEBUG_PRINT("Filesystem not available, no logs loaded");
     }
 
-    // Create tabs for the last 3 days
     char tab_names[3][16];
     lv_obj_t* tabs[3];
-    std::vector<LogEntry> entries_by_day[3];
+    std::vector<LogEntry*> entries_by_day[3];
 
     for (int i = 0; i < 3; i++) {
         struct tm day_time = *timeinfo;
-        day_time.tm_mday -= i; // Go back i days
+        day_time.tm_mday -= i;
         day_time.tm_hour = 0;
         day_time.tm_min = 0;
         day_time.tm_sec = 0;
-        mktime(&day_time); // Normalize to start of day
+        mktime(&day_time);
 
-        // Format as MM/DD/YY
         strftime(tab_names[i], sizeof(tab_names[i]), "%m/%d/%y", &day_time);
         tabs[i] = lv_tabview_add_tab(tabview, tab_names[i]);
 
-        // Filter entries for this day
         time_t day_start = mktime(&day_time);
         day_time.tm_hour = 23;
         day_time.tm_min = 59;
         day_time.tm_sec = 59;
-        mktime(&day_time); // Normalize to end of day
+        mktime(&day_time);
         time_t day_end = mktime(&day_time);
 
         char day_start_str[20], day_end_str[20];
@@ -2669,23 +2763,21 @@ void createViewLogsScreen() {
         strftime(day_end_str, sizeof(day_end_str), "%Y-%m-%d %H:%M:%S", localtime(&day_end));
         DEBUG_PRINTF("Filtering %s: %s to %s\n", tab_names[i], day_start_str, day_end_str);
 
-        for (const auto& entry : parsedLogEntries) {
+        for (auto& entry : parsedLogEntries) {
             if (entry.timestamp >= day_start && entry.timestamp <= day_end) {
-                entries_by_day[i].push_back(entry);
+                entries_by_day[i].push_back(&entry);
                 DEBUG_PRINTF("Matched entry for %s: %s\n", tab_names[i], entry.text.c_str());
             }
         }
 
-        // Sort entries by timestamp (earliest to latest)
         std::sort(entries_by_day[i].begin(), entries_by_day[i].end(), 
-            [](const LogEntry& a, const LogEntry& b) {
-                return a.timestamp < b.timestamp;
+            [](const LogEntry* a, const LogEntry* b) {
+                return a->timestamp < b->timestamp;
             });
 
         DEBUG_PRINTF("Day %s: %d entries\n", tab_names[i], entries_by_day[i].size());
     }
 
-    // Populate each tab with entries
     for (int i = 0; i < 3; i++) {
         lv_obj_t* container = lv_obj_create(tabs[i]);
         lv_obj_set_size(container, SCREEN_WIDTH - 20, SCREEN_HEIGHT - 70);
@@ -2703,7 +2795,7 @@ void createViewLogsScreen() {
         } else {
             int y_pos = 0;
             int entry_num = 1;
-            for (const auto& entry : entries_by_day[i]) {
+            for (const auto* entry : entries_by_day[i]) {
                 lv_obj_t* entry_btn = lv_btn_create(container);
                 lv_obj_set_size(entry_btn, SCREEN_WIDTH - 30, 25);
                 lv_obj_set_pos(entry_btn, 5, y_pos);
@@ -2711,8 +2803,7 @@ void createViewLogsScreen() {
                 lv_obj_add_style(entry_btn, &style_btn_pressed, LV_STATE_PRESSED);
                 lv_obj_set_style_bg_color(entry_btn, lv_color_hex(0x3A3A3A), 0);
 
-                // Format time as HH:MM
-                struct tm* entry_time = localtime(&entry.timestamp);
+                struct tm* entry_time = localtime(&entry->timestamp);
                 char time_str[16];
                 strftime(time_str, sizeof(time_str), "%H:%M", entry_time);
                 String entry_label = "Entry " + String(entry_num++) + ": " + String(time_str);
@@ -2722,31 +2813,30 @@ void createViewLogsScreen() {
                 lv_obj_add_style(label, &style_text, 0);
                 lv_obj_align(label, LV_ALIGN_LEFT_MID, 5, 0);
 
-                // Store the full entry text as user data
-                lv_obj_set_user_data(entry_btn, (void*)&entry);
+                lv_obj_set_user_data(entry_btn, (void*)entry);
 
                 lv_obj_add_event_cb(entry_btn, [](lv_event_t* e) {
-                  lv_obj_t* btn = lv_event_get_target(e);
-                  LogEntry* entry = (LogEntry*)lv_obj_get_user_data(btn);
-                  if (entry) {
-                      DEBUG_PRINTF("Raw entry text: %s\n", entry->text.c_str());
-                      // Skip the initial "YYYY-MM-DD HH:MM:SS: " (20 chars)
-                      String entry_data = entry->text.substring(20);
-                      DEBUG_PRINTF("After substring(20): %s\n", entry_data.c_str());
-                      // Extract just the CSV part after the repeated timestamp
-                      int comma_pos = entry_data.indexOf(',');
-                      if (comma_pos != -1) {
-                          entry_data = entry_data.substring(comma_pos + 1);
-                      }
-                      DEBUG_PRINTF("Final entry data: %s\n", entry_data.c_str());
-                      String formatted_entry = getFormattedEntry(entry_data);
-                      DEBUG_PRINTF("Formatted: %s\n", formatted_entry.c_str());
-                      lv_obj_t* msgbox = lv_msgbox_create(NULL, "Log Entry Details", 
-                          formatted_entry.c_str(), NULL, true);
-                      lv_obj_set_size(msgbox, 280, 180);
-                      lv_obj_center(msgbox);
-                      lv_obj_set_style_text_font(lv_msgbox_get_text(msgbox), &lv_font_montserrat_14, 0);
-                  }
+                    lv_obj_t* btn = lv_event_get_target(e);
+                    LogEntry* entry = (LogEntry*)lv_obj_get_user_data(btn);
+                    if (entry) {
+                        DEBUG_PRINTF("Raw entry text: %s\n", entry->text.c_str());
+                        // Find the colon after the timestamp
+                        int colon_pos = entry->text.indexOf(':');
+                        if (colon_pos != -1) {
+                            // Skip past "YYYY-MM-DD HH:MM:SS: "
+                            String entry_data = entry->text.substring(colon_pos + 2);
+                            DEBUG_PRINTF("Extracted entry data: %s\n", entry_data.c_str());
+                            String formatted_entry = getFormattedEntry(entry_data);
+                            DEBUG_PRINTF("Formatted: %s\n", formatted_entry.c_str());
+                            lv_obj_t* msgbox = lv_msgbox_create(NULL, "Log Entry Details", 
+                                formatted_entry.c_str(), NULL, true);
+                            lv_obj_set_size(msgbox, 280, 180);
+                            lv_obj_center(msgbox);
+                            lv_obj_set_style_text_font(lv_msgbox_get_text(msgbox), &lv_font_montserrat_14, 0);
+                        } else {
+                            DEBUG_PRINT("No colon found in entry text");
+                        }
+                    }
                 }, LV_EVENT_CLICKED, NULL);
 
                 y_pos += 30;
@@ -2754,7 +2844,6 @@ void createViewLogsScreen() {
         }
     }
 
-    // Back button
     lv_obj_t* back_btn = lv_btn_create(logs_screen);
     lv_obj_set_size(back_btn, 80, 40);
     lv_obj_align(back_btn, LV_ALIGN_TOP_LEFT, 10, 0);
@@ -2770,7 +2859,6 @@ void createViewLogsScreen() {
         createMainMenu();
     }, LV_EVENT_CLICKED, NULL);
 
-    // Reset button
     lv_obj_t* reset_btn = lv_btn_create(logs_screen);
     lv_obj_set_size(reset_btn, 80, 40);
     lv_obj_align(reset_btn, LV_ALIGN_TOP_RIGHT, -10, 0);
@@ -2825,7 +2913,6 @@ void createViewLogsScreen() {
         }, LV_EVENT_VALUE_CHANGED, NULL);
     }, LV_EVENT_CLICKED, NULL);
 
-    // Load the screen
     lv_scr_load(logs_screen);
     lv_timer_handler();
     DEBUG_PRINT("View logs screen created successfully");
@@ -3083,7 +3170,7 @@ void saveEntry(const String& entry) {
     Serial.println("New Entry:");
     Serial.println(entry);
     
-    bool saved = appendToLog(entry);
+    bool saved = appendToLog(entry); // Pass raw CSV entry directly
     
     if (WiFi.status() == WL_CONNECTED) {
         if (saved) {
