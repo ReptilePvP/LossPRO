@@ -1,17 +1,24 @@
 void syncTimeWithNTP() {
-    if (WiFi.status() == WL_CONNECTED) {
-        DEBUG_PRINT("Syncing time with NTP server...");
-        configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
-        
-        struct tm timeinfo;
-        if (getLocalTime(&timeinfo)) {
-            DEBUG_PRINTF("Time synchronized: %02d:%02d:%02d %02d/%02d/%04d\n", 
-                timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec,
-                timeinfo.tm_mday, timeinfo.tm_mon + 1, timeinfo.tm_year + 1900);
-        } else {
-            DEBUG_PRINT("Failed to obtain time");
-        }
+    configTime(gmtOffset_sec / 3600, daylightOffset_sec, ntpServer);
+    struct tm timeinfo;
+    if (getLocalTime(&timeinfo)) {
+        DEBUG_PRINT("NTP time synchronized");
+        // Update RTC with NTP time
+        m5::rtc_time_t TimeStruct;
+        TimeStruct.hours = timeinfo.tm_hour;
+        TimeStruct.minutes = timeinfo.tm_min;
+        TimeStruct.seconds = timeinfo.tm_sec;
+        M5.Rtc.setTime(&TimeStruct);
+
+        m5::rtc_date_t DateStruct;
+        DateStruct.year = timeinfo.tm_year + 1900;
+        DateStruct.month = timeinfo.tm_mon + 1;
+        DateStruct.date = timeinfo.tm_mday;
+        DateStruct.weekDay = timeinfo.tm_wday;
+        M5.Rtc.setDate(&DateStruct);
+
+        DEBUG_PRINT("RTC updated with NTP time");
     } else {
-        DEBUG_PRINT("WiFi not connected, cannot sync time");
+        DEBUG_PRINT("Failed to sync with NTP");
     }
 }
