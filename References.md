@@ -30,6 +30,8 @@
    - WiFi Settings Screen
    - View Logs Screen
    - Settings Menu
+   - Brightness Settings Screen
+   - Sound Settings Screen
 
 2. **Data Management**
    - Local storage on SD card
@@ -52,8 +54,10 @@
    - `confirmScreen`: Entry confirmation
    - `wifi_screen`: WiFi network scanning and connection
    - `wifi_manager_screen`: WiFi settings management
-   - `settings_screen`: System settings management
+   - `settingsScreen`: System settings management
    - `logs_screen`: View and navigate saved logs
+   - `brightness_settings_screen`: Display brightness adjustment
+   - `sound_settings_screen`: Sound settings configuration
 
 2. **Status Indicators**
    - Battery indicator (top-left corner)
@@ -70,7 +74,7 @@
    - Screen background style
    - Title and text styles
    - Keyboard button style
-   - Custom fonts (Montserrat 14, 16, and 20)
+   - Custom fonts (Montserrat 14, 16, 20, and 24)
 
 ### Key Functions
 
@@ -85,7 +89,9 @@
 - `createWiFiScreen()`: WiFi network selection interface
 - `createWiFiManagerScreen()`: WiFi network management
 - `createViewLogsScreen()`: View saved log entries
-- `createSettingsMenu()`: System settings configuration
+- `createSettingsScreen()`: System settings configuration
+- `createBrightnessSettingsScreen()`: Display brightness adjustment
+- `createSoundSettingsScreen()`: Sound settings configuration
 
 #### WiFi Management
 - `WiFiManager` class: Custom implementation for WiFi management
@@ -104,6 +110,14 @@
 - `connectToSavedNetworks()`: Attempts to connect to saved networks
 - `onWiFiStatus()`: Callback for WiFi status updates
 - `onWiFiScanComplete()`: Callback for scan completion
+
+#### Settings Management
+- `loadSettings()`: Loads saved settings from Preferences
+- `saveSettings()`: Saves settings to Preferences
+- `updateBrightness()`: Updates display brightness
+- `toggleSound()`: Toggles sound on/off
+- `adjustVolume()`: Adjusts system volume
+- `toggleAutoBrightness()`: Toggles auto-brightness feature
 
 #### Status Indicators
 - `addStatusBar()`: Adds status bar to a screen
@@ -129,6 +143,8 @@
 - `setSystemTimeFromRTC()`: Sets system time from M5Stack RTC
 - `println_log()`: Helper for logging to Serial and Display
 - `printf_log()`: Formatted logging to Serial and Display
+- `DEBUG_PRINT()`: Debug logging macro
+- `DEBUG_PRINTF()`: Formatted debug logging macro
 
 #### Touch and Input Handling
 - `my_disp_flush()`: Display driver flush callback
@@ -144,6 +160,11 @@
   - Display buffer size: SCREEN_WIDTH * 20
   - Custom display flush callback
   - Custom touchpad read callback
+- Brightness control:
+  - Range: 10-255 (4-100%)
+  - Preset options: Low (50), Medium (150), High (250)
+  - Auto-brightness option
+  - Saved in Preferences
 
 ### Color Options
 Available colors for shirt items:
@@ -188,6 +209,8 @@ const char* items[] = {
 6. The confirmation screen shows a formatted summary of the entry
 7. Logs can be viewed, sorted, and navigated by pages
 8. Optional webhook integration for remote logging
+9. Display brightness can be adjusted and saved in settings
+10. Each screen uses dedicated variables to prevent memory conflicts
 
 ## Technical Implementation Details
 - Touch coordinates are properly mapped to the screen
@@ -199,16 +222,21 @@ const char* items[] = {
 - Default WiFi credentials are included but can be overridden
 - Debug macros are available for troubleshooting
 - Custom WiFiManager class for robust network handling
-- Time synchronization with NTP servers
-- ESP32Time library for RTC management
+- Static screen variables prevent memory access conflicts
+- Preferences library used for persistent settings storage
 
-## Development Notes
-- The M5Stack CoreS3 uses the M5Unified library
-- LVGL 8.4.0 style functions do not accept a state parameter
-- Custom keyboard implementation for WiFi password entry
-- SD Card pins for M5Stack CoreS3:
-  - SCK: 36
-  - MISO: 35
-  - MOSI: 37
-  - CS: 4
-- Debug output can be enabled/disabled via DEBUG_ENABLED flag
+## Known Issues and Solutions
+1. **Brightness Settings Screen Crash**
+   - **Issue**: Accessing the brightness settings screen caused a "LoadProhibited" exception
+   - **Solution**: Implemented a dedicated static variable `brightness_settings_screen` instead of reusing the global `settings_screen` variable
+   - **Details**: Each screen type now uses its own static variable to prevent memory conflicts during screen transitions
+
+2. **WiFi Connection Stability**
+   - **Issue**: Occasional disconnections during extended operation
+   - **Solution**: Implemented robust reconnection logic in the WiFiManager class
+   - **Details**: The system attempts to reconnect to saved networks in order of priority
+
+3. **Memory Management**
+   - **Issue**: Memory leaks from improper screen cleanup
+   - **Solution**: Proper screen deletion sequence with delay between operations
+   - **Details**: Each screen creation function now properly cleans up previous instances
