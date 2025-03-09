@@ -69,8 +69,8 @@ void saveEntry(const String& entry);
 void updateStatus(const char* message, uint32_t color);
 void sendWebhook(const String& entry);
 void onWiFiScanComplete(const std::vector<NetworkInfo>& results);
-void onWiFiStatus(WiFiState state, const String& message);
-
+void updateWiFiLoadingScreen(bool success, const String& message);
+void showWiFiLoadingScreen(const String& ssid);
 
 // Global variables for scrolling
 lv_obj_t *current_scroll_obj = nullptr;
@@ -134,6 +134,7 @@ static lv_color_t buf1[SCREEN_WIDTH * 20];  // Increased buffer size
 // Display and input drivers
 static lv_disp_drv_t disp_drv;
 static lv_indev_drv_t indev_drv;
+
 // LVGL semaphore for thread safety (from CoreS3 User Demo)
 SemaphoreHandle_t xGuiSemaphore;
 #define LV_TICK_PERIOD_MS 10
@@ -250,6 +251,12 @@ lv_obj_t* shirt_next_btn = nullptr;
 lv_obj_t* pants_next_btn = nullptr;
 lv_obj_t* shoes_next_btn = nullptr;
 lv_obj_t* settings_screen = nullptr;
+
+// Add these global variables with other UI elements
+lv_obj_t* wifi_loading_screen = nullptr;
+lv_obj_t* wifi_loading_spinner = nullptr;
+lv_obj_t* wifi_loading_label = nullptr;
+lv_obj_t* wifi_result_label = nullptr;
 
 const char* shirtColors[] = {
     "Red", "Orange", "Yellow", "Green", "Blue", "Purple", 
@@ -2047,14 +2054,24 @@ void createWiFiManagerScreen() {
     lv_obj_align(saved_networks_list, LV_ALIGN_TOP_MID, 0, 80);
     lv_obj_set_style_bg_color(saved_networks_list, lv_color_hex(0x2D2D2D), 0);
     lv_obj_set_scroll_dir(saved_networks_list, LV_DIR_VER);
+    lv_obj_set_style_pad_top(saved_networks_list, 5, 0);
+    lv_obj_set_style_pad_bottom(saved_networks_list, 5, 0);
 
+    // Set the saved_networks_list as the current scroll object for button navigation
+    current_scroll_obj = saved_networks_list;
+    
     auto networks = wifiManager.getSavedNetworks();
     for (size_t i = 0; i < networks.size(); i++) {
         lv_obj_t* net_cont = lv_obj_create(saved_networks_list);
         lv_obj_set_size(net_cont, SCREEN_WIDTH - 40, 60);
         lv_obj_set_pos(net_cont, 0, i * 70);
         lv_obj_set_style_bg_color(net_cont, lv_color_hex(0x3A3A3A), 0);
-
+        
+        // Disable scrolling for individual network containers
+        lv_obj_clear_flag(net_cont, LV_OBJ_FLAG_SCROLLABLE);
+        
+        // Add margin between network items for better visual separation
+        lv_obj_set_style_pad_bottom(net_cont, 10, 0);
         String status = networks[i].connected ? " (Connected)" : "";
         lv_obj_t* ssid_label = lv_label_create(net_cont);
         lv_label_set_text(ssid_label, (networks[i].ssid + status).c_str());
@@ -2080,6 +2097,8 @@ void createWiFiManagerScreen() {
             auto nets = wifiManager.getSavedNetworks();
             for (const auto& net : nets) {
                 if (net.ssid == ssid) {
+                    // Show loading screen before connecting
+                    showWiFiLoadingScreen(net.ssid);
                     wifiManager.connect(net.ssid, net.password, false, net.priority);
                     break;
                 }
@@ -2989,6 +3008,8 @@ void sendWebhook(const String& entry) {
 // Callback for status updates
 void onWiFiStatus(WiFiState state, const String& message) {
     DEBUG_PRINTF("WiFi Status: %s - %s\n", wifiManager.getStateString().c_str(), message.c_str());
+    
+    // Update status bar if visible
     if (status_bar) {
         lv_label_set_text(status_bar, message.c_str());
         lv_obj_set_style_text_color(status_bar, 
@@ -2996,6 +3017,18 @@ void onWiFiStatus(WiFiState state, const String& message) {
             state == WiFiState::WIFI_CONNECTING ? lv_color_hex(0xFFFF00) : 
             lv_color_hex(0xFF0000), 0);
     }
+    
+    // Update loading screen if active
+    if (wifi_loading_screen != nullptr && lv_obj_is_valid(wifi_loading_screen) && 
+        lv_scr_act() == wifi_loading_screen) {
+        if (state == WiFiState::WIFI_CONNECTED) {
+            updateWiFiLoadingScreen(true, "WiFi Connected!");
+        } else if (state == WiFiState::WIFI_DISCONNECTED && 
+                  (message.indexOf("failed") >= 0 || message.indexOf("Failed") >= 0)) {
+            updateWiFiLoadingScreen(false, "Connection Failed!");
+        }
+    }
+    
     updateWifiIndicator();
 }
 // Callback for scan results
@@ -3451,4 +3484,99 @@ void createBrightnessSettingsScreen() {
     }, LV_EVENT_VALUE_CHANGED, NULL);
 
     DEBUG_PRINT("Finished createBrightnessSettingsScreen");
+}
+// Create a function to show the WiFi loading screen
+void showWiFiLoadingScreen(const String& ssid) {
+    if (wifi_loading_screen != nullptr) {
+        lv_obj_del(wifi_loading_screen);
+    }
+    
+    wifi_loading_screen = lv_obj_create(NULL);
+    lv_obj_add_style(wifi_loading_screen, &style_screen, 0);
+    
+    // Create header
+    lv_obj_t* header = lv_obj_create(wifi_loading_screen);
+    lv_obj_set_size(header, SCREEN_WIDTH, 40);
+    lv_obj_align(header, LV_ALIGN_TOP_MID, 0, 0);
+    lv_obj_set_style_bg_color(header, lv_color_hex(0x333333), 0);
+    lv_obj_t* title = lv_label_create(header);
+    lv_label_set_text(title, "WiFi Connection");
+    lv_obj_add_style(title, &style_title, 0);
+    lv_obj_align(title, LV_ALIGN_CENTER, 0, 0);
+    
+    // Add status indicators
+    addWifiIndicator(wifi_loading_screen);
+    addBatteryIndicator(wifi_loading_screen);
+    
+    // Create spinner
+    wifi_loading_spinner = lv_spinner_create(wifi_loading_screen, 1000, 60);
+    lv_obj_set_size(wifi_loading_spinner, 100, 100);
+    lv_obj_align(wifi_loading_spinner, LV_ALIGN_CENTER, 0, -20);
+    
+    // Create connecting label
+    wifi_loading_label = lv_label_create(wifi_loading_screen);
+    lv_label_set_text_fmt(wifi_loading_label, "Connecting to %s...", ssid.c_str());
+    lv_obj_align(wifi_loading_label, LV_ALIGN_CENTER, 0, 60);
+    
+    // Create result label (hidden initially)
+    wifi_result_label = lv_label_create(wifi_loading_screen);
+    lv_obj_set_style_text_font(wifi_result_label, &lv_font_montserrat_16, 0);
+    lv_label_set_text(wifi_result_label, "");
+    lv_obj_align(wifi_result_label, LV_ALIGN_CENTER, 0, 90);
+    lv_obj_add_flag(wifi_result_label, LV_OBJ_FLAG_HIDDEN);
+    
+    // Create back button (hidden initially)
+    lv_obj_t* back_btn = lv_btn_create(wifi_loading_screen);
+    lv_obj_set_size(back_btn, 120, 40);
+    lv_obj_align(back_btn, LV_ALIGN_BOTTOM_MID, 0, -20);
+    lv_obj_add_style(back_btn, &style_btn, 0);
+    lv_obj_add_flag(back_btn, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_t* back_label = lv_label_create(back_btn);
+    lv_label_set_text(back_label, "Back");
+    lv_obj_center(back_label);
+    lv_obj_add_event_cb(back_btn, [](lv_event_t* e) {
+        createWiFiManagerScreen();
+    }, LV_EVENT_CLICKED, NULL);
+    
+    // Store back button reference for later use
+    lv_obj_set_user_data(wifi_loading_screen, back_btn);
+    
+    lv_scr_load(wifi_loading_screen);
+}
+// Function to update the WiFi loading screen based on connection result
+void updateWiFiLoadingScreen(bool success, const String& message) {
+    if (wifi_loading_screen == nullptr || !lv_obj_is_valid(wifi_loading_screen)) {
+        return;
+    }
+    
+    // Hide spinner
+    if (wifi_loading_spinner != nullptr && lv_obj_is_valid(wifi_loading_spinner)) {
+        lv_obj_add_flag(wifi_loading_spinner, LV_OBJ_FLAG_HIDDEN);
+    }
+    
+    // Update result label
+    if (wifi_result_label != nullptr && lv_obj_is_valid(wifi_result_label)) {
+        lv_obj_clear_flag(wifi_result_label, LV_OBJ_FLAG_HIDDEN);
+        lv_label_set_text(wifi_result_label, message.c_str());
+        lv_obj_set_style_text_color(wifi_result_label, 
+            success ? lv_color_hex(0x00FF00) : lv_color_hex(0xFF0000), 0);
+    }
+    
+    // Show back button
+    lv_obj_t* back_btn = (lv_obj_t*)lv_obj_get_user_data(wifi_loading_screen);
+    if (back_btn != nullptr && lv_obj_is_valid(back_btn)) {
+        lv_obj_clear_flag(back_btn, LV_OBJ_FLAG_HIDDEN);
+    }
+    
+    // Auto return to WiFi manager screen after successful connection
+    if (success) {
+        static lv_timer_t* return_timer = nullptr;
+        if (return_timer != nullptr) {
+            lv_timer_del(return_timer);
+        }
+        return_timer = lv_timer_create([](lv_timer_t* timer) {
+            createWiFiManagerScreen();
+            lv_timer_del(timer);
+        }, 2000, NULL);
+    }
 }
