@@ -609,18 +609,8 @@ void loop() {
         }
     }
 
-    // Reset connection attempts when connected - will be handled by WiFiManager in the future
-    if (WiFi.status() == WL_CONNECTED && wifiConnectionAttempts > 0) {
-        wifiConnectionAttempts = 0;
-        manualDisconnect = false;
-        DEBUG_PRINT("WiFi connected successfully");
-        
-        static bool timeSynced = false;
-        if (!timeSynced) {
-            syncTimeWithNTP();
-            timeSynced = true;
-        }
-    }
+    wifiManager.update();  // Process WiFi events and state changes
+
 
     // Periodic NTP sync (every hour)
     static unsigned long lastTimeSync = 0;
