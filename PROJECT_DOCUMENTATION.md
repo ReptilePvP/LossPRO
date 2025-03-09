@@ -35,6 +35,7 @@ The Loss Prevention Log system is an IoT device built on the M5Stack CoreS3 plat
    - Handles network scanning, connection, and reconnection
    - Stores and prioritizes saved networks
    - Provides callbacks for connection status updates
+   - Includes visual feedback for connection attempts with loading screen
 
 3. **User Interface**
    - Built with LVGL (Light and Versatile Graphics Library) (8.4.0)
@@ -44,9 +45,11 @@ The Loss Prevention Log system is an IoT device built on the M5Stack CoreS3 plat
      - Color selection (shirt, pants, shoes)
      - Item selection
      - Confirmation screen
-     - WiFi configuration
+     - WiFi configuration with loading screen
      - Log viewing
-     - Settings screens
+     - Settings screens (sound, brightness)
+   - Optimized scrollable lists with non-scrollable headers and individual items
+   - Visual feedback for WiFi connection attempts
 
 4. **Data Storage**
    - Uses SD card for log file storage
@@ -61,6 +64,8 @@ The Loss Prevention Log system is an IoT device built on the M5Stack CoreS3 plat
 6. **Network Connectivity**
    - WiFi connection for time synchronization
    - Optional webhook functionality for remote logging
+   - Enhanced WiFi scanning with proper state management
+   - Visual connection status feedback
 
 ## Functional Workflow
 
@@ -83,12 +88,19 @@ The Loss Prevention Log system is an IoT device built on the M5Stack CoreS3 plat
    - View saved logs with pagination
    - Logs are displayed with timestamps
    - Sorted by recency (newest first)
+   - Non-scrollable headers for better navigation
 
 4. **Settings Management**
-   - WiFi configuration
+   - WiFi configuration with visual connection feedback
    - Sound settings
    - Brightness control
    - Time settings
+
+5. **WiFi Management**
+   - Scan for available networks
+   - Connect to selected networks with loading screen feedback
+   - Manage saved networks with scrollable list
+   - Prioritize networks for automatic connection
 
 ## Key Files and Their Functions
 
@@ -109,15 +121,20 @@ The Loss Prevention Log system is an IoT device built on the M5Stack CoreS3 plat
 - `createColorMenuShirt()`, `createColorMenuPants()`, `createColorMenuShoes()`: Color selection screens
 - `createItemMenu()`: Creates the item selection screen
 - `createConfirmScreen()`: Creates the confirmation screen
-- `createViewLogsScreen()`: Creates the log viewing screen
+- `createViewLogsScreen()`: Creates the log viewing screen with non-scrollable header
 - `createSettingsScreen()`: Creates the settings menu
+- `createWiFiManagerScreen()`: Creates the WiFi manager screen with scrollable network list
+- `showWiFiLoadingScreen()`: Shows loading screen during WiFi connection attempts
+- `updateWiFiLoadingScreen()`: Updates the WiFi loading screen based on connection results
 
 ### WiFi Management
 - `WiFiManager::connect()`: Connects to a specific WiFi network
 - `WiFiManager::startScan()`: Initiates a WiFi network scan
+- `WiFiManager::update()`: Updates the WiFi state machine to process events and state changes
 - `WiFiManager::addNetwork()`: Adds a network to saved networks
 - `scanNetworks()`: Scans for available WiFi networks
 - `connectToSavedNetworks()`: Attempts to connect to previously saved networks
+- `onWiFiStatus()`: Callback for WiFi connection status updates
 
 ### Data Management
 - `appendToLog()`: Appends a new entry to the log file
@@ -131,6 +148,23 @@ The Loss Prevention Log system is an IoT device built on the M5Stack CoreS3 plat
 - `syncTimeWithNTP()`: Synchronizes time with NTP servers
 - `updateBatteryIndicator()`: Updates the battery level indicator
 - `updateWifiIndicator()`: Updates the WiFi connection indicator
+
+## UI Enhancements
+
+### Scrollable Lists
+- Implemented in the WiFi manager screen for saved networks list
+- Individual network items are non-scrollable for better user experience
+- Proper padding between items for visual separation
+
+### Non-Scrollable Headers
+- Headers in various screens (logs, settings, etc.) are set as non-scrollable
+- Improves user experience by keeping titles visible during scrolling
+
+### WiFi Connection Feedback
+- Loading screen with spinner during connection attempts
+- Visual feedback for successful or failed connections
+- Automatic return to WiFi manager after successful connection
+- Manual return option for failed connections
 
 ## Hardware Interfaces
 
@@ -199,27 +233,30 @@ The Loss Prevention Log system is an IoT device built on the M5Stack CoreS3 plat
 ## Troubleshooting Guide
 
 ### Common Issues
-
 1. **WiFi Connection Problems**
-   - Check saved network credentials
-   - Ensure network is within range
-   - Verify router settings (2.4GHz networks are more reliable)
+   - Check that WiFi credentials are correct
+   - Ensure WiFiManager::update() is called in the main loop
+   - Verify the WiFi network is within range
+   - Try resetting saved networks if persistent issues occur
 
-2. **SD Card Errors**
+2. **SD Card Issues**
    - Ensure SD card is properly formatted (FAT32)
-   - Check if SD card is properly inserted
+   - Check that SD card is properly inserted
+   - Verify SPI bus is properly released after operations
    - Try a different SD card if problems persist
 
-3. **Time Synchronization Issues**
-   - Verify WiFi connection is working
-   - Check if NTP servers are accessible
-   - Manually set time if automatic sync fails
+3. **Display Issues**
+   - Adjust brightness settings
+   - Recalibrate touch if input is not registering correctly
+   - Check for LVGL memory allocation issues if UI elements are missing
 
 4. **Battery Issues**
    - Ensure device is properly charged
-   - Reduce screen brightness to extend battery life
+   - Reduce brightness to extend battery life
    - Disable WiFi when not needed
+   - Check battery indicator for accurate readings
 
-## Conclusion
-
-The Loss Prevention Log system provides a robust, portable solution for retail loss prevention documentation. Built on the versatile M5Stack CoreS3 platform with the Dual button & Key unit, it offers an intuitive interface for quick logging of suspicious activities. The system's modular design allows for future enhancements and customizations to meet evolving needs.
+### Debugging Tools
+1. Serial monitor output with DEBUG_PRINT and DEBUG_PRINTF macros
+2. On-screen status messages for user feedback
+3. Visual indicators for WiFi and battery status

@@ -28,6 +28,7 @@
    - Item Selection
    - Confirmation Screen
    - WiFi Settings Screen
+   - WiFi Loading Screen
    - View Logs Screen
    - Settings Menu
    - Brightness Settings Screen
@@ -44,6 +45,8 @@
    - Network scanning and connection handling
    - Saved network prioritization
    - Connection status monitoring
+   - Visual connection feedback with loading screen
+   - Proper state machine updates in main loop
 
 ### UI Elements
 1. **Screens**
@@ -54,6 +57,7 @@
    - `confirmScreen`: Entry confirmation
    - `wifi_screen`: WiFi network scanning and connection
    - `wifi_manager_screen`: WiFi settings management
+   - `wifi_loading_screen`: Visual feedback during WiFi connection attempts
    - `settingsScreen`: System settings management
    - `logs_screen`: View and navigate saved logs
    - `brightness_settings_screen`: Display brightness adjustment
@@ -76,6 +80,12 @@
    - Keyboard button style
    - Custom fonts (Montserrat 14, 16, 20, and 24)
 
+4. **Scrollable Lists**
+   - Implemented for saved networks list
+   - Individual items within lists are non-scrollable
+   - Headers are non-scrollable for better user experience
+   - Proper padding between list items
+
 ### Key Functions
 
 #### Screen Creation
@@ -87,8 +97,10 @@
 - `createItemMenu()`: Shows available item options
 - `createConfirmScreen()`: Shows entry confirmation
 - `createWiFiScreen()`: WiFi network selection interface
-- `createWiFiManagerScreen()`: WiFi network management
-- `createViewLogsScreen()`: View saved log entries
+- `createWiFiManagerScreen()`: WiFi network management with scrollable list
+- `showWiFiLoadingScreen()`: Displays loading screen during WiFi connection
+- `updateWiFiLoadingScreen()`: Updates loading screen based on connection result
+- `createViewLogsScreen()`: View saved log entries with non-scrollable header
 - `createSettingsScreen()`: System settings configuration
 - `createBrightnessSettingsScreen()`: Display brightness adjustment
 - `createSoundSettingsScreen()`: Sound settings configuration
@@ -96,7 +108,7 @@
 #### WiFi Management
 - `WiFiManager` class: Custom implementation for WiFi management
   - `begin()`: Initializes WiFi functionality
-  - `update()`: Updates WiFi state machine
+  - `update()`: Updates WiFi state machine (crucial for proper operation)
   - `connect()`: Connects to specified network
   - `startScan()`: Initiates network scanning
   - `addNetwork()`: Adds network to saved list
@@ -152,6 +164,25 @@
 - `handleSwipeLeft()`: Handles left swipe gesture
 - `handleSwipeVertical()`: Handles vertical swipe gesture
 
+### UI Enhancements
+
+#### Scrollable Lists
+- Used for saved networks list in WiFi manager screen
+- Individual network items are non-scrollable for better UX
+- Implemented with `lv_obj_set_scroll_dir()` and `lv_obj_clear_flag()`
+- Proper padding between items using `lv_obj_set_style_pad_bottom()`
+
+#### Non-Scrollable Headers
+- Headers in various screens are set as non-scrollable
+- Implemented with `lv_obj_clear_flag(header, LV_OBJ_FLAG_SCROLLABLE)`
+- Ensures titles remain visible during content scrolling
+
+#### WiFi Connection Feedback
+- Loading screen with spinner during connection attempts
+- Visual feedback for successful or failed connections
+- Automatic return to WiFi manager after successful connection
+- Manual return option for failed connections
+
 ### Display Configuration
 - Screen dimensions: 320x240 pixels
 - LVGL configuration:
@@ -165,6 +196,13 @@
   - Preset options: Low (50), Medium (150), High (250)
   - Auto-brightness option
   - Saved in Preferences
+
+### WiFi Configuration
+- Scan timeout handling with proper state machine updates
+- Connection status feedback with loading screen
+- Saved networks stored in Preferences
+- Network priority system for automatic connections
+- Scrollable saved networks list with non-scrollable items
 
 ### Color Options
 Available colors for shirt items:
@@ -200,43 +238,27 @@ const char* items[] = {
 };
 ```
 
-## Usage Notes
-1. The application requires initial WiFi setup for time synchronization
-2. Entries can be made offline and stored on the SD card
-3. The UI is optimized for touch interaction
-4. All screens feature consistent navigation and status indicators
-5. The battery indicator updates every 5 seconds to conserve resources
-6. The confirmation screen shows a formatted summary of the entry
-7. Logs can be viewed, sorted, and navigated by pages
-8. Optional webhook integration for remote logging
-9. Display brightness can be adjusted and saved in settings
-10. Each screen uses dedicated variables to prevent memory conflicts
+## Important Implementation Notes
 
-## Technical Implementation Details
-- Touch coordinates are properly mapped to the screen
-- Battery level monitoring includes smoothing algorithm
-- WiFi scanning has timeout handling to prevent hanging
-- SD card operations use a dedicated SPI instance
-- Memory management includes proper cleanup of screens
-- LVGL styles follow version 8.4.0 conventions
-- Default WiFi credentials are included but can be overridden
-- Debug macros are available for troubleshooting
-- Custom WiFiManager class for robust network handling
-- Static screen variables prevent memory access conflicts
-- Preferences library used for persistent settings storage
+### WiFi Scanning
+- WiFiManager::update() must be called in the main loop
+- This ensures proper processing of WiFi events and state changes
+- Without this call, WiFi scanning will time out
 
-## Known Issues and Solutions
-1. **Brightness Settings Screen Crash**
-   - **Issue**: Accessing the brightness settings screen caused a "LoadProhibited" exception
-   - **Solution**: Implemented a dedicated static variable `brightness_settings_screen` instead of reusing the global `settings_screen` variable
-   - **Details**: Each screen type now uses its own static variable to prevent memory conflicts during screen transitions
+### Scrollable Lists
+- For proper scrolling behavior:
+  1. Set the parent container as scrollable with `lv_obj_set_scroll_dir()`
+  2. Make individual items non-scrollable with `lv_obj_clear_flag(item, LV_OBJ_FLAG_SCROLLABLE)`
+  3. Add proper padding between items with `lv_obj_set_style_pad_bottom()`
 
-2. **WiFi Connection Stability**
-   - **Issue**: Occasional disconnections during extended operation
-   - **Solution**: Implemented robust reconnection logic in the WiFiManager class
-   - **Details**: The system attempts to reconnect to saved networks in order of priority
+### Non-Scrollable Headers
+- To prevent headers from scrolling:
+  1. Create a header container
+  2. Clear the scrollable flag with `lv_obj_clear_flag(header, LV_OBJ_FLAG_SCROLLABLE)`
+  3. Add content to the header
 
-3. **Memory Management**
-   - **Issue**: Memory leaks from improper screen cleanup
-   - **Solution**: Proper screen deletion sequence with delay between operations
-   - **Details**: Each screen creation function now properly cleans up previous instances
+### WiFi Connection Feedback
+- The loading screen provides visual feedback during connection attempts
+- It automatically returns to the WiFi manager after successful connection
+- For failed connections, it shows a "Back" button
+- This improves user experience by providing clear status information

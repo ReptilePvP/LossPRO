@@ -761,6 +761,10 @@ void createMainMenu() {
     lv_obj_set_size(header, SCREEN_WIDTH, 50);
     lv_obj_set_style_bg_color(header, lv_color_hex(0x333333), 0);
     lv_obj_t* title = lv_label_create(header);
+   
+    // Make the header non-scrollable
+    lv_obj_clear_flag(header, LV_OBJ_FLAG_SCROLLABLE);
+    
     lv_label_set_text(title, "Loss Prevention Logger");
     lv_obj_add_style(title, &style_title, 0);
     lv_obj_align(title, LV_ALIGN_CENTER, 0, 0);
@@ -1011,6 +1015,7 @@ void createGenderMenu() {
     lv_obj_set_size(header, 320, 50);
     lv_obj_set_style_bg_color(header, lv_color_hex(0x333333), 0);
     lv_obj_t *title = lv_label_create(header);
+    lv_obj_clear_flag(header, LV_OBJ_FLAG_SCROLLABLE);
     lv_label_set_text(title, "Select Gender");
     lv_obj_add_style(title, &style_title, 0);
     lv_obj_align(title, LV_ALIGN_CENTER, 0, 0);
@@ -2397,6 +2402,10 @@ void createViewLogsScreen() {
     lv_obj_set_size(header, 320, 40);
     lv_obj_set_pos(header, 0, 0);
     lv_obj_set_style_bg_color(header, lv_color_hex(0x333333), 0);
+    
+    // Make the header non-scrollable
+    lv_obj_clear_flag(header, LV_OBJ_FLAG_SCROLLABLE);
+    
     lv_obj_t* title = lv_label_create(header);
     lv_label_set_text(title, "Log Entries - Last 3 Days");
     lv_obj_add_style(title, &style_title, 0);
@@ -2574,7 +2583,7 @@ void createViewLogsScreen() {
 
     lv_obj_t* back_btn = lv_btn_create(logs_screen);
     lv_obj_set_size(back_btn, 80, 40);
-    lv_obj_align(back_btn, LV_ALIGN_TOP_LEFT, 10, 0);
+    lv_obj_align(back_btn, LV_ALIGN_BOTTOM_LEFT, 10, 0);
     lv_obj_add_style(back_btn, &style_btn, 0);
     lv_obj_add_style(back_btn, &style_btn_pressed, LV_STATE_PRESSED);
     lv_obj_t* back_label = lv_label_create(back_btn);
@@ -2589,7 +2598,7 @@ void createViewLogsScreen() {
 
     lv_obj_t* reset_btn = lv_btn_create(logs_screen);
     lv_obj_set_size(reset_btn, 80, 40);
-    lv_obj_align(reset_btn, LV_ALIGN_TOP_RIGHT, -10, 0);
+    lv_obj_align(reset_btn, LV_ALIGN_BOTTOM_RIGHT, -10, 0);
     lv_obj_add_style(reset_btn, &style_btn, 0);
     lv_obj_add_style(reset_btn, &style_btn_pressed, LV_STATE_PRESSED);
     lv_obj_t* reset_label = lv_label_create(reset_btn);
@@ -3100,7 +3109,7 @@ void createSettingsScreen() {
     // Settings container with subtle shadow
     lv_obj_t* container = lv_obj_create(settingsScreen);
     lv_obj_set_size(container, 300, 150);
-    lv_obj_align(container, LV_ALIGN_TOP_MID, 0, 95);
+    lv_obj_align(container, LV_ALIGN_TOP_MID, 0, 70);
     lv_obj_set_style_bg_color(container, lv_color_hex(0x2A2A40), 0);
     lv_obj_set_style_radius(container, 10, 0);
     lv_obj_set_style_shadow_color(container, lv_color_hex(0x7294CB), 0); // Burlington blue shadow
@@ -3121,6 +3130,7 @@ void createSettingsScreen() {
         createSoundSettingsScreen(); // Navigate to sound settings
     }, LV_EVENT_CLICKED, NULL);
 
+    // Brightness option
     lv_obj_t* brightness_btn = lv_btn_create(container);
     lv_obj_set_size(brightness_btn, 260, 40);
     lv_obj_align(brightness_btn, LV_ALIGN_TOP_MID, 0, 50);
