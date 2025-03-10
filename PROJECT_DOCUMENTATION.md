@@ -37,7 +37,25 @@ The Loss Prevention Log system is an IoT device built on the M5Stack CoreS3 plat
    - Provides callbacks for connection status updates
    - Includes visual feedback for connection attempts with loading screen
 
-3. **User Interface**
+3. **Screen Transitions (`screen_transition.h`)**
+   - Provides smooth and consistent transitions between screens
+   - Implements multiple transition types:
+     - Fade transitions for subtle screen changes
+     - Slide transitions (left/right/up/down) for directional navigation
+     - Zoom transitions for emphasis on new screens
+     - Over transitions for overlay screens
+   - Configurable animation duration and easing functions
+   - Optimized for M5Stack CoreS3 performance
+
+4. **Card-Style UI Components**
+   - Modern card-based interface design
+   - Consistent styling across all screens
+   - Enhanced button styles with pressed state animations
+   - Improved visual hierarchy with cards for content grouping
+   - Better touch target sizing for improved usability
+   - Responsive layout adapting to screen orientation
+
+5. **User Interface**
    - Built with LVGL (Light and Versatile Graphics Library) (8.4.0)
    - Features multiple screens for different functions:
      - Main menu
@@ -50,18 +68,19 @@ The Loss Prevention Log system is an IoT device built on the M5Stack CoreS3 plat
      - Settings screens (sound, brightness)
    - Optimized scrollable lists with non-scrollable headers and individual items
    - Visual feedback for WiFi connection attempts
+   - Smooth transitions between screens for improved user experience
 
-4. **Data Storage**
+6. **Data Storage**
    - Uses SD card for log file storage
    - Implements file operations with error handling
    - Stores logs in a text-based format with timestamps
 
-5. **Time Synchronization**
+7. **Time Synchronization**
    - NTP (Network Time Protocol) for internet time synchronization
    - Fallback to RTC when internet is unavailable
    - Time display in 12-hour format with AM/PM
 
-6. **Network Connectivity**
+8. **Network Connectivity**
    - WiFi connection for time synchronization
    - Optional webhook functionality for remote logging
    - Enhanced WiFi scanning with proper state management
@@ -102,12 +121,60 @@ The Loss Prevention Log system is an IoT device built on the M5Stack CoreS3 plat
    - Manage saved networks with scrollable list
    - Prioritize networks for automatic connection
 
+## UI Enhancements
+
+### Card-Style UI
+- Modern card-based interface design for content organization
+- Elevated appearance with subtle shadows and rounded corners
+- Consistent styling across all screens for visual coherence
+- Improved touch targets for better usability
+- Visual feedback on interaction (pressed states, animations)
+- Optimized for the M5Stack CoreS3 display size and resolution
+
+### Screen Transitions
+- Smooth animated transitions between screens
+- Multiple transition types for different navigation contexts:
+  - Slide Left/Right: For forward/backward navigation
+  - Slide Up/Down: For hierarchical navigation
+  - Fade: For subtle screen changes
+  - Zoom In/Out: For emphasis on new screens or returning to previous screens
+- Consistent navigation patterns:
+  - Forward navigation uses slide left or zoom in
+  - Backward navigation uses slide right or zoom out
+  - Settings screens use slide up transitions
+  - Confirmation screens use fade transitions
+- Configurable animation duration (default: 300ms)
+- Performance optimizations for smooth animations
+
+### Scrollable Lists
+- Implemented in the WiFi manager screen for saved networks list
+- Individual network items are non-scrollable for better user experience
+- Proper padding between items for visual separation
+
+### Non-Scrollable Headers
+- Headers in various screens (logs, settings, etc.) are set as non-scrollable
+- Improves user experience by keeping titles visible during scrolling
+
+### WiFi Connection Feedback
+- Loading screen with spinner during connection attempts
+- Visual feedback for successful or failed connections
+- Automatic return to WiFi manager after successful connection
+- Manual return option for failed connections
+
 ## Key Files and Their Functions
 
 ### Main Application Files
 - **`Loss_Prevention_Log.ino`**: Main application entry point and core functionality
 - **`WiFiManager.cpp`**: Implementation of WiFi management functionality
 - **`WiFiManager.h`**: Header file defining the WiFiManager class and related structures
+- **`screen_transition.h`**: Implementation of screen transition effects and animations
+
+### Documentation Files
+- **`README.md`**: Overview and quick-start documentation
+- **`PROJECT_DOCUMENTATION.md`**: This detailed technical documentation
+- **`References.md`**: Reference materials and function listings
+- **`Card Style UI.md`**: Implementation details for the card-style UI
+- **`SCREEN TRANSITIONS IMPLEMENTATION GUIDE.md`**: Guide for implementing screen transitions
 
 ### Data Files
 - **`log.txt`**: Main log file stored on the SD card
@@ -126,6 +193,14 @@ The Loss Prevention Log system is an IoT device built on the M5Stack CoreS3 plat
 - `createWiFiManagerScreen()`: Creates the WiFi manager screen with scrollable network list
 - `showWiFiLoadingScreen()`: Shows loading screen during WiFi connection attempts
 - `updateWiFiLoadingScreen()`: Updates the WiFi loading screen based on connection results
+
+### Screen Transitions
+- `load_screen_with_animation()`: Main function for loading screens with transitions
+- `transition_fade_anim()`: Handles fade transition animations
+- `transition_slide_anim()`: Handles slide transition animations
+- `transition_zoom_anim()`: Handles zoom transition animations
+- `transition_over_anim()`: Handles overlay transition animations
+- `transition_anim_ready_cb()`: Callback function when animations complete
 
 ### WiFi Management
 - `WiFiManager::connect()`: Connects to a specific WiFi network

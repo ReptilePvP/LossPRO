@@ -31,7 +31,6 @@ The Loss Prevention Log system is an embedded IoT solution built on the M5Stack 
 ## Software Dependencies
 
 ### Required Libraries
-```
 - M5Unified (1.0.0 or later)
 - M5GFX (0.1.6 or later)
 - LVGL (8.4.0)
@@ -43,7 +42,6 @@ The Loss Prevention Log system is an embedded IoT solution built on the M5Stack 
 - ESP32Time
 - HTTPClient (Arduino ESP32 core)
 - Wire (Arduino ESP32 core)
-```
 
 ### Development Environment
 - Arduino IDE 2.2.0 or later
@@ -125,18 +123,26 @@ The system follows a modular design with the following key components:
    - Saved network management with prioritization
    - Complete state machine design for robust operation
 
-3. **User Interface**
+3. **Screen Transitions (`screen_transition.h`)**
+   - Custom implementation for smooth screen transitions
+   - Multiple transition effects (fade, slide, zoom)
+   - Consistent navigation experience
+   - Performance-optimized animations
+
+4. **User Interface**
    - Built with LVGL 8.4.0
+   - Card-style UI components for modern look and feel
    - Multiple well-defined screens for different functions
    - Enhanced with custom styles and layouts
    - Optimized scrollable lists and non-scrollable headers
+   - Smooth animations and transitions between screens
 
-4. **Data Storage**
+5. **Data Storage**
    - SD card-based log storage
    - Structured log format with timestamps
    - Optional webhook integration for remote logging
 
-5. **System Utilities**
+6. **System Utilities**
    - Battery monitoring
    - Time synchronization via NTP
    - Status indicators and notifications
@@ -147,6 +153,7 @@ The system uses state machines for managing:
 - User interface workflow
 - Data entry process
 - Log navigation
+- Screen transitions
 
 ### Data Flow
 1. User selects log entry details (gender, colors, items)
@@ -161,10 +168,13 @@ The system uses state machines for managing:
 - **`Loss_Prevention_Log.ino`** - Main application with UI and logic
 - **`WiFiManager.h`** - Header defining the WiFiManager class
 - **`WiFiManager.cpp`** - Implementation of WiFi management functionality
+- **`screen_transition.h`** - Screen transition effects and animations
 - **`lv_conf.h`** - LVGL configuration file
 - **`README.md`** - This documentation file
 - **`PROJECT_DOCUMENTATION.md`** - Detailed technical documentation
 - **`References.md`** - Reference materials and function listings
+- **`Card Style UI.md`** - Card-style UI implementation details
+- **`SCREEN TRANSITIONS IMPLEMENTATION GUIDE.md`** - Guide for implementing screen transitions
 
 ### Data Files
 - **`log.txt`** - Main log file stored on SD card

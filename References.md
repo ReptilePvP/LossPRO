@@ -48,6 +48,33 @@
    - Visual connection feedback with loading screen
    - Proper state machine updates in main loop
 
+4. **Screen Transitions**
+   - Smooth animated transitions between screens
+   - Multiple transition types:
+     - TRANSITION_NONE: No animation (instant)
+     - TRANSITION_FADE: Fade in/out
+     - TRANSITION_SLIDE_LEFT: Current screen exits left, new screen enters from right
+     - TRANSITION_SLIDE_RIGHT: Current screen exits right, new screen enters from left
+     - TRANSITION_SLIDE_UP: Current screen exits up, new screen enters from bottom
+     - TRANSITION_SLIDE_DOWN: Current screen exits down, new screen enters from top
+     - TRANSITION_ZOOM_IN: New screen zooms in
+     - TRANSITION_ZOOM_OUT: Current screen zooms out, new screen appears
+     - TRANSITION_OVER_LEFT: New screen slides over from left
+     - TRANSITION_OVER_RIGHT: New screen slides over from right
+     - TRANSITION_OVER_TOP: New screen slides over from top
+     - TRANSITION_OVER_BOTTOM: New screen slides over from bottom
+   - Consistent navigation patterns for improved user experience
+   - Configurable animation duration (default: 300ms)
+
+5. **Card-Style UI**
+   - Modern card-based interface design
+   - Custom styles for cards and interactive elements:
+     - `style_card`: Base style for card elements
+     - `style_card_pressed`: Style for pressed state of card elements
+   - Enhanced visual hierarchy with content grouping
+   - Improved touch targets for better usability
+   - Visual feedback on interaction (pressed states, animations)
+
 ### UI Elements
 1. **Screens**
    - `mainScreen`: Home screen with main options
@@ -104,6 +131,19 @@
 - `createSettingsScreen()`: System settings configuration
 - `createBrightnessSettingsScreen()`: Display brightness adjustment
 - `createSoundSettingsScreen()`: Sound settings configuration
+
+#### Screen Transitions
+- `load_screen_with_animation(lv_obj_t* new_screen, screen_transition_type_t type, uint32_t time)`: Loads a new screen with the specified transition animation
+- `transition_fade_anim(void* var, int32_t v)`: Animation callback for fade transitions
+- `transition_slide_anim(void* var, int32_t v)`: Animation callback for slide transitions
+- `transition_zoom_anim(void* var, int32_t v)`: Animation callback for zoom transitions
+- `transition_over_anim(void* var, int32_t v)`: Animation callback for overlay transitions
+- `transition_anim_ready_cb(lv_anim_t* a)`: Callback function when animations complete
+
+#### Card-Style UI Functions
+- `initStyles()`: Initializes all UI styles including card styles
+- `createCardStyleButton(lv_obj_t* parent, const char* text, lv_event_cb_t event_cb)`: Creates a card-style button
+- `createCardContainer(lv_obj_t* parent, lv_coord_t width, lv_coord_t height)`: Creates a card container for content
 
 #### WiFi Management
 - `WiFiManager` class: Custom implementation for WiFi management
@@ -166,6 +206,48 @@
 
 ### UI Enhancements
 
+#### Card-Style UI Implementation
+- Card containers with rounded corners and subtle shadows
+- Consistent padding and margins for visual harmony
+- Color palette with primary, secondary, and accent colors
+- Elevated appearance with gradient backgrounds
+- Interactive elements with clear visual feedback
+- Implementation in `initStyles()` function:
+  ```c
+  // Card style initialization
+  lv_style_init(&style_card);
+  lv_style_set_radius(&style_card, 12);
+  lv_style_set_bg_color(&style_card, lv_color_hex(0xFFFFFF));
+  lv_style_set_bg_opa(&style_card, LV_OPA_90);
+  lv_style_set_shadow_width(&style_card, 15);
+  lv_style_set_shadow_color(&style_card, lv_color_hex(0x000000));
+  lv_style_set_shadow_opa(&style_card, LV_OPA_20);
+  lv_style_set_border_width(&style_card, 0);
+  lv_style_set_pad_all(&style_card, 15);
+  
+  // Card pressed style
+  lv_style_init(&style_card_pressed);
+  lv_style_set_shadow_width(&style_card_pressed, 5);
+  lv_style_set_shadow_ofs_y(&style_card_pressed, 2);
+  lv_style_set_bg_color(&style_card_pressed, lv_color_hex(0xEEEEEE));
+  ```
+
+#### Screen Transitions Implementation
+- Defined in `screen_transition.h`
+- Uses LVGL's animation system for smooth transitions
+- Proper memory management to avoid leaks during transitions
+- Example usage:
+  ```c
+  // Create a new screen
+  lv_obj_t* new_screen = lv_obj_create(NULL);
+  
+  // Add content to the screen
+  // ...
+  
+  // Load the screen with a transition
+  load_screen_with_animation(new_screen, TRANSITION_SLIDE_LEFT, 300);
+  ```
+
 #### Scrollable Lists
 - Used for saved networks list in WiFi manager screen
 - Individual network items are non-scrollable for better UX
@@ -178,10 +260,10 @@
 - Ensures titles remain visible during content scrolling
 
 #### WiFi Connection Feedback
-- Loading screen with spinner during connection attempts
-- Visual feedback for successful or failed connections
-- Automatic return to WiFi manager after successful connection
-- Manual return option for failed connections
+- The loading screen provides visual feedback during connection attempts
+- It automatically returns to the WiFi manager after successful connection
+- For failed connections, it shows a "Back" button
+- This improves user experience by providing clear status information
 
 ### Display Configuration
 - Screen dimensions: 320x240 pixels
