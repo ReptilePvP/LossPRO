@@ -12,6 +12,7 @@ SPIClass SPI_SD; // Custom SPI instance for SD card
 #include <SD.h>
 #include <time.h>
 #include "screen_transition.h"
+#include "ScreenManager.h"
 // Define timezone and NTP server constants for EST
 #define NTP_TIMEZONE  "EST5EDT,M3.2.0,M11.1.0"  // Eastern Time with automatic DST
 
@@ -99,7 +100,6 @@ const unsigned long WIFI_RECONNECT_INTERVAL = 10000; // 10 seconds between conne
 const int MAX_WIFI_CONNECTION_ATTEMPTS = 5; // Maximum number of consecutive connection attempts
 int wifiConnectionAttempts = 0;
 bool wifiReconnectEnabled = true;
-
 
 // WiFi scan management
 bool wifiScanInProgress = false;
@@ -203,7 +203,6 @@ void setSystemTimeFromRTC() {
     M5.Rtc.getTime(&TimeStruct);
 
     // We need to set the ESP32 system time from the UTC time in the RTC
-    // ESP32 internal time will be properly adjusted for timezone
     
     // First construct a tm structure with the UTC time from RTC
     struct tm timeinfo = {0};
@@ -219,14 +218,14 @@ void setSystemTimeFromRTC() {
     time_t t = mktime(&timeinfo);
     
     // Since mktime() interprets as local time but our RTC has UTC,
-    // we need to adjust for that difference by SUBTRACTING the GMT offset
-    // EST is UTC-5, so we SUBTRACT 5 hours (18000 seconds)
-    t -= 18000; // Subtract 5 hours for EST base offset
+    // we need to adjust for that difference
+    // During DST (which is active now), Eastern Time is UTC-4, not UTC-5
+    t -= 14400; // Subtract 4 hours (14400 seconds) for EDT
     
     // Set system time
     struct timeval tv = { .tv_sec = t, .tv_usec = 0 };
     settimeofday(&tv, NULL);
-    DEBUG_PRINT("System time set from RTC (UTC adjusted for EST)");
+    DEBUG_PRINT("System time set from RTC (UTC adjusted for EDT)");
     
     // Log current time for verification
     struct tm timeinfo_check;
@@ -868,9 +867,12 @@ void createMainMenu() {
     lv_obj_set_style_pad_column(grid, 10, 0);
     lv_obj_set_style_pad_row(grid, 10, 0);
     lv_obj_set_content_width(grid, 300);
-    lv_obj_set_scroll_dir(grid, LV_DIR_HOR);
+    //scroll improvement
+    lv_obj_add_flag(grid, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scroll_dir(grid, LV_DIR_VER);  // Changed to vertical scrolling
     lv_obj_set_scrollbar_mode(grid, LV_SCROLLBAR_MODE_ACTIVE);
-    lv_obj_add_flag(grid, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_SCROLL_MOMENTUM);
+    lv_obj_set_scroll_snap_y(grid, LV_SCROLL_SNAP_NONE);  // Disable snap scrolling for smoother experience
+    lv_obj_add_flag(grid, LV_OBJ_FLAG_SCROLL_MOMENTUM);  // Add momentum for smoother scrolling
     current_scroll_obj = grid;
 
     // Card 1: New Entry (Row 0, Col 0)
@@ -901,7 +903,9 @@ void createMainMenu() {
     lv_obj_t* logs_label = lv_label_create(logs_card);
     lv_label_set_text(logs_label, "Logs");
     lv_obj_align(logs_label, LV_ALIGN_BOTTOM_MID, 0, -8);
-    lv_obj_add_event_cb(logs_card, [](lv_event_t* e) { createViewLogsScreen(); }, LV_EVENT_CLICKED, NULL);
+    lv_obj_add_event_cb(logs_card, [](lv_event_t* e) {
+         createViewLogsScreen();
+    }, LV_EVENT_CLICKED, NULL);
 
     // Card 3: Settings (Row 1, Col 0)
     lv_obj_t* settings_card = lv_obj_create(grid);
@@ -915,10 +919,14 @@ void createMainMenu() {
     lv_obj_t* settings_label = lv_label_create(settings_card);
     lv_label_set_text(settings_label, "Settings");
     lv_obj_align(settings_label, LV_ALIGN_BOTTOM_MID, 0, -8);
-    lv_obj_add_event_cb(settings_card, [](lv_event_t* e) { createSettingsScreen(); }, LV_EVENT_CLICKED, NULL);
+    lv_obj_add_event_cb(settings_card, [](lv_event_t* e) {
+        createSettingsScreen();
+    }, LV_EVENT_CLICKED, NULL);
 
     // Card 4: Battery (Row 1, Col 1)
     lv_obj_t* battery_card = lv_obj_create(grid);
+    lv_obj_set_grid_cell(battery_card, LV_GRID_ALIGN_STRETCH, 1, 1, LV_GRID_ALIGN_STRETCH, 1, 1);
+    lv_obj_add_style(battery_card, &style_card_info, 0);
     lv_obj_set_grid_cell(battery_card, LV_GRID_ALIGN_STRETCH, 1, 1, LV_GRID_ALIGN_STRETCH, 1, 1);
     lv_obj_add_style(battery_card, &style_card_info, 0);
     battery_icon = lv_label_create(battery_card);
@@ -2023,111 +2031,114 @@ void createWiFiManagerScreen() {
     wifi_manager_screen = lv_obj_create(NULL);
     lv_obj_add_style(wifi_manager_screen, &style_screen, 0);
 
+    // Header
     lv_obj_t* header = lv_obj_create(wifi_manager_screen);
-    lv_obj_set_size(header, SCREEN_WIDTH, 50);
+    lv_obj_set_size(header, SCREEN_WIDTH, 40);
     lv_obj_set_style_bg_color(header, lv_color_hex(0x333333), 0);
+    lv_obj_set_style_bg_opa(header, LV_OPA_COVER, 0);
+    lv_obj_clear_flag(header, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_t* title = lv_label_create(header);
-    lv_label_set_text(title, "WiFi Settings");
+    lv_label_set_text(title, "WiFi Manager");
     lv_obj_add_style(title, &style_title, 0);
     lv_obj_align(title, LV_ALIGN_CENTER, 0, 0);
 
-    lv_obj_t* status_label = lv_label_create(wifi_manager_screen);
-    lv_obj_align(status_label, LV_ALIGN_TOP_MID, 0, 60);
-    lv_label_set_text(status_label, "Saved Networks:");
+    // WiFi Enable/Disable Slider
+    lv_obj_t* wifi_switch_container = lv_obj_create(wifi_manager_screen);
+    lv_obj_set_size(wifi_switch_container, SCREEN_WIDTH - 20, 50);
+    lv_obj_align(wifi_switch_container, LV_ALIGN_TOP_MID, 0, 50);
+    lv_obj_set_style_bg_opa(wifi_switch_container, LV_OPA_TRANSP, 0);
 
+    lv_obj_t* wifi_switch_label = lv_label_create(wifi_switch_container);
+    lv_label_set_text(wifi_switch_label, "WiFi:");
+    lv_obj_align(wifi_switch_label, LV_ALIGN_LEFT_MID, 10, 0);
+
+    lv_obj_t* wifi_switch = lv_switch_create(wifi_switch_container);
+    lv_obj_align(wifi_switch, LV_ALIGN_RIGHT_MID, -10, 0);
+    lv_obj_add_state(wifi_switch, wifiManager.isEnabled() ? LV_STATE_CHECKED : 0);
+    lv_obj_add_event_cb(wifi_switch, [](lv_event_t* e) {
+        bool enabled = lv_obj_has_state(e->target, LV_STATE_CHECKED);
+        wifiManager.setEnabled(enabled);
+        if (enabled) {
+            wifiManager.connectToBestNetwork();
+        } else {
+            wifiManager.disconnect(true);
+        }
+        // Refresh the screen to update network list
+        createWiFiManagerScreen();
+    }, LV_EVENT_VALUE_CHANGED, NULL);
+
+    // Saved Networks List
     saved_networks_list = lv_obj_create(wifi_manager_screen);
-    lv_obj_set_size(saved_networks_list, SCREEN_WIDTH - 20, SCREEN_HEIGHT - 120);
-    lv_obj_align(saved_networks_list, LV_ALIGN_TOP_MID, 0, 80);
-    lv_obj_set_style_bg_color(saved_networks_list, lv_color_hex(0x2D2D2D), 0);
-    lv_obj_set_scroll_dir(saved_networks_list, LV_DIR_VER);
-    lv_obj_set_style_pad_top(saved_networks_list, 5, 0);
-    lv_obj_set_style_pad_bottom(saved_networks_list, 5, 0);
-
-    // Set the saved_networks_list as the current scroll object for button navigation
+    lv_obj_set_size(saved_networks_list, SCREEN_WIDTH - 20, SCREEN_HEIGHT - 110); // Adjusted height to fit slider
+    lv_obj_align(saved_networks_list, LV_ALIGN_TOP_MID, 0, 110); // Adjusted position
+    lv_obj_set_style_bg_opa(saved_networks_list, LV_OPA_TRANSP, 0);
+    lv_obj_add_flag(saved_networks_list, LV_OBJ_FLAG_SCROLLABLE);
     current_scroll_obj = saved_networks_list;
-    
+
+    loadSavedNetworks();
     auto networks = wifiManager.getSavedNetworks();
     for (size_t i = 0; i < networks.size(); i++) {
-        lv_obj_t* net_cont = lv_obj_create(saved_networks_list);
-        lv_obj_set_size(net_cont, SCREEN_WIDTH - 40, 60);
-        lv_obj_set_pos(net_cont, 0, i * 70);
-        lv_obj_set_style_bg_color(net_cont, lv_color_hex(0x3A3A3A), 0);
-        
-        // Disable scrolling for individual network containers
-        lv_obj_clear_flag(net_cont, LV_OBJ_FLAG_SCROLLABLE);
-        
-        // Add margin between network items for better visual separation
-        lv_obj_set_style_pad_bottom(net_cont, 10, 0);
-        String status = networks[i].connected ? " (Connected)" : "";
-        lv_obj_t* ssid_label = lv_label_create(net_cont);
-        lv_label_set_text(ssid_label, (networks[i].ssid + status).c_str());
-        lv_obj_align(ssid_label, LV_ALIGN_LEFT_MID, 5, -10);
+        lv_obj_t* network_card = lv_obj_create(saved_networks_list);
+        lv_obj_set_size(network_card, 280, 60);
+        lv_obj_align(network_card, LV_ALIGN_TOP_MID, 0, i * 70);
+        lv_obj_add_style(network_card, &style_card_action, 0);
+        lv_obj_add_style(network_card, &style_card_pressed, LV_STATE_PRESSED);
 
-        lv_obj_t* prio_label = lv_label_create(net_cont);
-        lv_label_set_text(prio_label, ("Priority: " + String(networks[i].priority)).c_str());
-        lv_obj_align(prio_label, LV_ALIGN_LEFT_MID, 5, 10);
+        lv_obj_t* ssid_label = lv_label_create(network_card);
+        lv_label_set_text(ssid_label, networks[i].ssid.c_str());
+        lv_obj_align(ssid_label, LV_ALIGN_LEFT_MID, 10, 0);
 
-        lv_obj_t* connect_btn = lv_btn_create(net_cont);
-        lv_obj_set_size(connect_btn, 80, 40);
-        lv_obj_align(connect_btn, LV_ALIGN_RIGHT_MID, -90, 0);
-        lv_obj_add_style(connect_btn, &style_btn, 0);
-        lv_obj_t* connect_label = lv_label_create(connect_btn);
-        lv_label_set_text(connect_label, "Connect");
-        lv_obj_center(connect_label);
-        lv_obj_add_event_cb(connect_btn, [](lv_event_t* e) {
-            lv_obj_t* cont = static_cast<lv_obj_t*>(lv_event_get_user_data(e)); // Cast to lv_obj_t*
-            lv_obj_t* label = lv_obj_get_child(cont, 0);
-            String ssid = lv_label_get_text(label);
-            int idx = ssid.indexOf(" (Connected)");
-            if (idx != -1) ssid = ssid.substring(0, idx);
-            auto nets = wifiManager.getSavedNetworks();
-            for (const auto& net : nets) {
-                if (net.ssid == ssid) {
-                    // Show loading screen before connecting
-                    showWiFiLoadingScreen(net.ssid);
-                    wifiManager.connect(net.ssid, net.password, false, net.priority);
-                    break;
-                }
-            }
-        }, LV_EVENT_CLICKED, net_cont);
+        if (networks[i].connected) {
+            lv_obj_t* status_label = lv_label_create(network_card);
+            lv_label_set_text(status_label, "Connected");
+            lv_obj_set_style_text_color(status_label, lv_color_hex(0x00FF00), 0);
+            lv_obj_align(status_label, LV_ALIGN_RIGHT_MID, -10, 0);
+        }
 
-        lv_obj_t* remove_btn = lv_btn_create(net_cont);
-        lv_obj_set_size(remove_btn, 80, 40);
-        lv_obj_align(remove_btn, LV_ALIGN_RIGHT_MID, -5, 0);
-        lv_obj_add_style(remove_btn, &style_btn, 0);
-        lv_obj_t* remove_label = lv_label_create(remove_btn);
-        lv_label_set_text(remove_label, "Remove");
-        lv_obj_center(remove_label);
-        lv_obj_add_event_cb(remove_btn, [](lv_event_t* e) {
-            lv_obj_t* cont = static_cast<lv_obj_t*>(lv_event_get_user_data(e)); // Cast to lv_obj_t*
-            lv_obj_t* label = lv_obj_get_child(cont, 0);
-            String ssid = lv_label_get_text(label);
-            int idx = ssid.indexOf(" (Connected)");
-            if (idx != -1) ssid = ssid.substring(0, idx);
-            wifiManager.removeNetwork(ssid);
-            createWiFiManagerScreen();
-        }, LV_EVENT_CLICKED, net_cont);
+        lv_obj_add_event_cb(network_card, [](lv_event_t* e) {
+            lv_obj_t* card = lv_event_get_target(e);
+            const char* ssid = lv_label_get_text(lv_obj_get_child(card, 0));
+            createWiFiScreen();
+        }, LV_EVENT_CLICKED, NULL);
     }
 
-    lv_obj_t* add_btn = lv_btn_create(wifi_manager_screen);
-    lv_obj_align(add_btn, LV_ALIGN_BOTTOM_RIGHT, -10, -10);
-    lv_obj_set_size(add_btn, 90, 40);
-    lv_obj_add_style(add_btn, &style_btn, 0);
-    lv_obj_t* add_label = lv_label_create(add_btn);
-    lv_label_set_text(add_label, "Add New");
-    lv_obj_center(add_label);
-    lv_obj_add_event_cb(add_btn, [](lv_event_t* e) { createWiFiScreen(); }, LV_EVENT_CLICKED, NULL);
+    // Scan Button
+    lv_obj_t* scan_btn = lv_btn_create(wifi_manager_screen);
+    lv_obj_set_size(scan_btn, 100, 40);
+    lv_obj_align(scan_btn, LV_ALIGN_BOTTOM_RIGHT, -10, -10);
+    lv_obj_add_style(scan_btn, &style_btn, 0);
+    lv_obj_add_style(scan_btn, &style_btn_pressed, LV_STATE_PRESSED);
+    lv_obj_t* scan_label = lv_label_create(scan_btn);
+    lv_label_set_text(scan_label, "Scan");
+    lv_obj_center(scan_label);
+    lv_obj_add_event_cb(scan_btn, [](lv_event_t* e) {
+        if (wifiManager.isEnabled()) {
+            wifiManager.startScan();
+            createWiFiScreen();
+        } else {
+            lv_obj_t* msgbox = lv_msgbox_create(NULL, "WiFi Disabled", "Please enable WiFi to scan.", NULL, true);
+            lv_obj_center(msgbox);
+        }
+    }, LV_EVENT_CLICKED, NULL);
 
+    // Back Button
     lv_obj_t* back_btn = lv_btn_create(wifi_manager_screen);
+    lv_obj_set_size(back_btn, 100, 40);
     lv_obj_align(back_btn, LV_ALIGN_BOTTOM_LEFT, 10, -10);
-    lv_obj_set_size(back_btn, 90, 40);
     lv_obj_add_style(back_btn, &style_btn, 0);
+    lv_obj_add_style(back_btn, &style_btn_pressed, LV_STATE_PRESSED);
     lv_obj_t* back_label = lv_label_create(back_btn);
-    lv_label_set_text(back_label, LV_SYMBOL_LEFT " Back");
+    lv_label_set_text(back_label, "Back");
     lv_obj_center(back_label);
-    lv_obj_add_event_cb(back_btn, [](lv_event_t* e) { createMainMenu(); }, LV_EVENT_CLICKED, NULL);
+    lv_obj_add_event_cb(back_btn, [](lv_event_t* e) {
+        if (e->code == LV_EVENT_CLICKED) {
+            M5.Speaker.tone(1800, 40);
+            createSettingsScreen();
+            load_screen_with_animation(settingsScreen, TRANSITION_SLIDE_RIGHT, 300);
+        }
+    }, LV_EVENT_CLICKED, NULL);
 
-    lv_scr_load(wifi_manager_screen);
+    load_screen_with_animation(wifi_manager_screen, TRANSITION_SLIDE_LEFT, 300);
 }
 
 void createWiFiScreen() {
@@ -2317,8 +2328,8 @@ String getTimestamp() {
         // Convert UTC to time_t
         time_t t = mktime(&utc_time);
         
-        // Adjust for timezone (UTC to EST)
-        t -= 18000; // Subtract 5 hours (UTC-5 for EST)
+        // Adjust for timezone (UTC to EDT)
+        t -= 14400; // Subtract 4 hours (UTC-4 for EDT)
         
         // Convert back to tm structure
         timeinfo = *localtime(&t);
@@ -3055,13 +3066,17 @@ void onWiFiScanComplete(const std::vector<NetworkInfo>& results) {
 }
 
 void createSettingsScreen() {
-    lv_obj_t* settings_screen = lv_obj_create(NULL);
-    lv_obj_add_style(settings_screen, &style_screen, 0);
+    if (settingsScreen) {
+        lv_obj_del(settingsScreen);
+        settingsScreen = nullptr;
+    }
+    settingsScreen = lv_obj_create(NULL);
+    lv_obj_add_style(settingsScreen, &style_screen, 0);
 
     // Header
-    lv_obj_t* header = lv_obj_create(settings_screen);
+    lv_obj_t* header = lv_obj_create(settingsScreen);
     lv_obj_set_size(header, SCREEN_WIDTH, 40);
-    lv_obj_set_style_bg_color(header, lv_color_hex(0x2D2D2D), 0);
+    lv_obj_set_style_bg_color(header, lv_color_hex(0x333333), 0);
     lv_obj_set_style_bg_opa(header, LV_OPA_COVER, 0);
     lv_obj_clear_flag(header, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_t* title = lv_label_create(header);
@@ -3069,54 +3084,67 @@ void createSettingsScreen() {
     lv_obj_add_style(title, &style_title, 0);
     lv_obj_align(title, LV_ALIGN_CENTER, 0, 0);
 
-    // Scrollable grid (2xN)
-    lv_obj_t* grid = lv_obj_create(settings_screen);
-    lv_obj_set_size(grid, SCREEN_WIDTH - 20, SCREEN_HEIGHT - 50);
-    lv_obj_align(grid, LV_ALIGN_TOP_MID, 0, 50);
-    lv_obj_set_style_bg_opa(grid, LV_OPA_TRANSP, 0);
-    lv_obj_set_layout(grid, LV_LAYOUT_GRID);
-    static lv_coord_t col_dsc[] = {140, 140, LV_GRID_TEMPLATE_LAST};
-    static lv_coord_t row_dsc[] = {80, 80, 80, LV_GRID_TEMPLATE_LAST};
-    lv_obj_set_grid_dsc_array(grid, col_dsc, row_dsc);
-    lv_obj_set_style_pad_column(grid, 10, 0);
-    lv_obj_set_style_pad_row(grid, 10, 0);
-    lv_obj_set_content_height(grid, 260);
-    lv_obj_add_flag(grid, LV_OBJ_FLAG_SCROLLABLE);
+    // Settings Container
+    lv_obj_t* container = lv_obj_create(settingsScreen);
+    lv_obj_set_size(container, SCREEN_WIDTH - 20, SCREEN_HEIGHT - 50);
+    lv_obj_align(container, LV_ALIGN_TOP_MID, 0, 50);
+    lv_obj_set_style_bg_opa(container, LV_OPA_TRANSP, 0);
+    lv_obj_add_flag(container, LV_OBJ_FLAG_SCROLLABLE);
+    current_scroll_obj = container;
 
-    // Card 1: WiFi Toggle
-    lv_obj_t* wifi_card = lv_obj_create(grid);
-    lv_obj_set_grid_cell(wifi_card, LV_GRID_ALIGN_STRETCH, 0, 1, LV_GRID_ALIGN_STRETCH, 0, 1);
-    lv_obj_add_style(wifi_card, &style_card_info, 0);
-    lv_obj_t* wifi_label = lv_label_create(wifi_card);
-    lv_label_set_text(wifi_label, "WiFi");
-    lv_obj_align(wifi_label, LV_ALIGN_TOP_MID, 0, 8);
-    lv_obj_t* wifi_switch = lv_switch_create(wifi_card);
-    lv_obj_set_size(wifi_switch, 50, 20);
-    lv_obj_align(wifi_switch, LV_ALIGN_BOTTOM_MID, 0, -8);
-    lv_obj_set_style_bg_color(wifi_switch, lv_color_hex(0x4A90E2), LV_PART_KNOB);
+    // WiFi Settings Button
+    lv_obj_t* wifi_btn = lv_btn_create(container);
+    lv_obj_set_size(wifi_btn, 280, 50);
+    lv_obj_align(wifi_btn, LV_ALIGN_TOP_MID, 0, 10);
+    lv_obj_add_style(wifi_btn, &style_btn, 0);
+    lv_obj_add_style(wifi_btn, &style_btn_pressed, LV_STATE_PRESSED);
+    lv_obj_t* wifi_label = lv_label_create(wifi_btn);
+    lv_label_set_text(wifi_label, "WiFi Settings");
+    lv_obj_center(wifi_label);
+    lv_obj_add_event_cb(wifi_btn, [](lv_event_t* e) {
+        createWiFiManagerScreen();
+    }, LV_EVENT_CLICKED, NULL);
 
-    // Card 2: Brightness Slider
-    lv_obj_t* bright_card = lv_obj_create(grid);
-    lv_obj_set_grid_cell(bright_card, LV_GRID_ALIGN_STRETCH, 1, 1, LV_GRID_ALIGN_STRETCH, 0, 1);
-    lv_obj_add_style(bright_card, &style_card_info, 0);
-    lv_obj_t* bright_label = lv_label_create(bright_card);
-    lv_label_set_text_fmt(bright_label, "Brightness: %d%%", (displayBrightness * 100) / 255);
-    lv_obj_align(bright_label, LV_ALIGN_CENTER, 0, 0);
-    lv_obj_add_event_cb(bright_card, [](lv_event_t* e) {
+    // Brightness Settings Button (unchanged)
+    lv_obj_t* bright_btn = lv_btn_create(container);
+    lv_obj_set_size(bright_btn, 280, 50);
+    lv_obj_align_to(bright_btn, wifi_btn, LV_ALIGN_OUT_BOTTOM_MID, 0, 10);
+    lv_obj_add_style(bright_btn, &style_btn, 0);
+    lv_obj_add_style(bright_btn, &style_btn_pressed, LV_STATE_PRESSED);
+    lv_obj_t* bright_label = lv_label_create(bright_btn);
+    lv_label_set_text(bright_label, "Brightness Settings");
+    lv_obj_center(bright_label);
+    lv_obj_add_event_cb(bright_btn, [](lv_event_t* e) {
         createBrightnessSettingsScreen();
     }, LV_EVENT_CLICKED, NULL);
 
-    // Card 3: Back Button
-    lv_obj_t* back_card = lv_obj_create(grid);
-    lv_obj_set_grid_cell(back_card, LV_GRID_ALIGN_STRETCH, 0, 1, LV_GRID_ALIGN_STRETCH, 1, 1);
-    lv_obj_add_style(back_card, &style_card_action, 0);
-    lv_obj_add_style(back_card, &style_card_pressed, LV_STATE_PRESSED);
-    lv_obj_t* back_label = lv_label_create(back_card);
-    lv_label_set_text(back_label, LV_SYMBOL_LEFT " Back");
-    lv_obj_center(back_label);
-    lv_obj_add_event_cb(back_card, [](lv_event_t* e) { lv_scr_load(main_menu_screen); }, LV_EVENT_CLICKED, NULL);
+    // Sound Settings Button (unchanged)
+    lv_obj_t* sound_btn = lv_btn_create(container);
+    lv_obj_set_size(sound_btn, 280, 50);
+    lv_obj_align_to(sound_btn, bright_btn, LV_ALIGN_OUT_BOTTOM_MID, 0, 10);
+    lv_obj_add_style(sound_btn, &style_btn, 0);
+    lv_obj_add_style(sound_btn, &style_btn_pressed, LV_STATE_PRESSED);
+    lv_obj_t* sound_label = lv_label_create(sound_btn);
+    lv_label_set_text(sound_label, "Sound Settings");
+    lv_obj_center(sound_label);
+    lv_obj_add_event_cb(sound_btn, [](lv_event_t* e) {
+        createSoundSettingsScreen();
+    }, LV_EVENT_CLICKED, NULL);
 
-    lv_scr_load(settings_screen);
+    // Back Button (unchanged)
+    lv_obj_t* back_btn = lv_btn_create(settingsScreen);
+    lv_obj_set_size(back_btn, 100, 40);
+    lv_obj_align(back_btn, LV_ALIGN_BOTTOM_MID, 0, -10);
+    lv_obj_add_style(back_btn, &style_btn, 0);
+    lv_obj_add_style(back_btn, &style_btn_pressed, LV_STATE_PRESSED);
+    lv_obj_t* back_label = lv_label_create(back_btn);
+    lv_label_set_text(back_label, "Back");
+    lv_obj_center(back_label);
+    lv_obj_add_event_cb(back_btn, [](lv_event_t* e) {
+            createMainMenu();
+    }, LV_EVENT_CLICKED, NULL);
+
+    lv_scr_load(settingsScreen);
 }
 
 void createSoundSettingsScreen() {
@@ -3419,9 +3447,9 @@ void createBrightnessSettingsScreen() {
     }, LV_EVENT_VALUE_CHANGED, NULL);
 
     // Back button
-    lv_obj_t* back_btn = lv_btn_create(container);
+    lv_obj_t* back_btn = lv_btn_create(container); // Change from brightness_settings_screen to container
     lv_obj_set_size(back_btn, 140, 50);
-    lv_obj_align(back_btn, LV_ALIGN_BOTTOM_MID, 0, -20);
+    lv_obj_align(back_btn, LV_ALIGN_TOP_MID, 0, 200); // Position it below auto brightness
     lv_obj_add_style(back_btn, &style_btn, 0);
     lv_obj_add_style(back_btn, &style_btn_pressed, LV_STATE_PRESSED);
     
