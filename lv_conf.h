@@ -100,7 +100,7 @@
  * EXTRA COMPONENTS
  *================*/
 
-#define LV_USE_CALENDAR   0
+#define LV_USE_CALENDAR   1
 #define LV_USE_CHART      1   // Changed to 0, not using charts currently
 #define LV_USE_COLORWHEEL 0
 #define LV_USE_IMGBTN     0
