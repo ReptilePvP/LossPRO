@@ -203,9 +203,9 @@ void setSystemTimeFromRTC() {
     }
 }
 
-// Add this near the top of your file with other global declarations
-static std::vector<LogEntry> parsedLogEntries;  // All log entries from SD card
-static std::vector<LogEntry> persistentLogEntries;  // Filtered entries for display
+// Global vector for parsed log entries
+static std::vector<LogEntry> parsedLogEntries;
+
 lv_obj_t *item_list = nullptr;  // Add this with other global LVGL objects
 
 bool wifiEnabled = true; // Already suggested in battery optimization; reusing here
@@ -368,277 +368,388 @@ const int NUM_KEYBOARD_PAGES = sizeof(btnm_mapplus) / sizeof(btnm_mapplus[0]);
 bool fileSystemInitialized = false;
 
 // Update parseTimestamp to handle the new format
-time_t parseTimestamp(const String& text) {
-    int startIdx = text.indexOf("Time: [") + 7;
-    int endIdx = text.indexOf("]", startIdx);
-    String timeStr = text.substring(startIdx, endIdx);
+time_t parseTimestamp(const String& entry) {
+    struct tm timeinfo = {0};
+    int day, year, hour, minute, second;
+    char monthStr[4]; // For 3-letter month abbreviation + null terminator
 
-    struct tm tm = {0};
-    int day, month, year, hour, minute, second;
-    if (sscanf(timeStr.c_str(), "%d-%d-%d %d:%d:%d", &day, &month, &year, &hour, &minute, &second) != 6) {
-        return 0;
+    // Expecting format: "DD-MMM-YYYY HH:MM:SS" (e.g., "05-Mar-2025 08:12:24")
+    if (sscanf(entry.c_str(), "%d-%3s-%d %d:%d:%d", &day, monthStr, &year, &hour, &minute, &second) == 6) {
+        timeinfo.tm_mday = day;
+        timeinfo.tm_year = year - 1900; // Years since 1900
+        timeinfo.tm_hour = hour;
+        timeinfo.tm_min = minute;
+        timeinfo.tm_sec = second;
+        timeinfo.tm_isdst = -1; // Let mktime figure out DST
+
+        // Convert 3-letter month abbreviation to month number (0-11)
+        static const char* months[] = {"Jan", "Feb", "Mar", "Apr", "May", "Jun", 
+                                       "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
+        for (int i = 0; i < 12; i++) {
+            if (strncmp(monthStr, months[i], 3) == 0) {
+                timeinfo.tm_mon = i;
+                break;
+            }
+        }
+
+        return mktime(&timeinfo);
     }
-
-    tm.tm_mday = day;
-    tm.tm_mon = month - 1;
-    tm.tm_year = year - 1900;
-    tm.tm_hour = hour;
-    tm.tm_min = minute;
-    tm.tm_sec = second;
-    tm.tm_isdst = -1;
-
-    return mktime(&tm);
+    return 0; // Invalid timestamp
 }
-
 String getTimestamp() {
     m5::rtc_date_t DateStruct;
     m5::rtc_time_t TimeStruct;
     M5.Rtc.getDate(&DateStruct);
     M5.Rtc.getTime(&TimeStruct);
-    char timestamp[20];
-    snprintf(timestamp, sizeof(timestamp), "[%02d-%02d-%04d %02d:%02d:%02d]",
-             DateStruct.date, DateStruct.month, DateStruct.year,
-             TimeStruct.hours, TimeStruct.minutes, TimeStruct.seconds);
-    return String(timestamp);
+
+    struct tm timeinfo = {0};
+    timeinfo.tm_year = DateStruct.year - 1900; // Years since 1900
+    timeinfo.tm_mon = DateStruct.month - 1;     // Months 0-11
+    timeinfo.tm_mday = DateStruct.date;
+    timeinfo.tm_hour = TimeStruct.hours;
+    timeinfo.tm_min = TimeStruct.minutes;
+    timeinfo.tm_sec = TimeStruct.seconds;
+    timeinfo.tm_isdst = -1;
+
+    if (timeinfo.tm_year > 70) { // Valid time (year > 1970)
+        char buffer[25];
+        strftime(buffer, sizeof(buffer), "%d-%b-%Y %H:%M:%S", &timeinfo); // e.g., "05-Mar-2025 08:12:24"
+        return String(buffer);
+    }
+    return "NoTime"; // Fallback if RTC isn’t set
 }
 
 // Example usage in logging
 bool appendToLog(const String& entry) {
     if (!fileSystemInitialized) {
-        DEBUG_PRINT("File system not initialized");
-        return false;
-    }
-
-    releaseSPIBus();
-    SPI_SD.begin(SD_SPI_SCK_PIN, SD_SPI_MISO_PIN, SD_SPI_MOSI_PIN, SD_SPI_CS_PIN);
-    File file = SD.open(LOG_FILENAME, FILE_APPEND);
-    if (!file) {
-        DEBUG_PRINT("Failed to open log file for appending");
-        SPI_SD.end();
-        SPI.begin();
-        return false;
-    }
-
-    // Split the entry into parts
-    String parts[5];
-    int partCount = 0;
-    int lastIndex = 0;
-    for (int i = 0; i < entry.length(); i++) {
-        if (entry.charAt(i) == ',' && partCount < 5) {
-            parts[partCount++] = entry.substring(lastIndex, i);
-            lastIndex = i + 1;
+        DEBUG_PRINT("File system not initialized, attempting to initialize...");
+        initFileSystem();
+        if (!fileSystemInitialized) {
+            DEBUG_PRINT("File system not initialized, cannot save entry");
+            return false;
         }
     }
-    if (lastIndex < entry.length()) {
-        parts[partCount++] = entry.substring(lastIndex);
+    
+    SPI.end();
+    delay(100);
+    SPI_SD.begin(SD_SPI_SCK_PIN, SD_SPI_MISO_PIN, SD_SPI_MOSI_PIN, -1);
+    pinMode(SD_SPI_CS_PIN, OUTPUT);
+    digitalWrite(SD_SPI_CS_PIN, HIGH);
+    delay(100);
+    
+    File file = SD.open(LOG_FILENAME, FILE_APPEND);
+    if (!file) {
+        DEBUG_PRINT("Failed to open log file for writing");
+        SPI_SD.end();
+        SPI.begin();
+        pinMode(TFT_DC, OUTPUT);
+        digitalWrite(TFT_DC, HIGH);
+        return false;
     }
-
-    // Format the output
+    
     String timestamp = getTimestamp();
-    String formatted = "Time: " + timestamp + "\n";
-    formatted += "Gender: " + (partCount > 0 ? parts[0] : "N/A") + "\n";
-    formatted += "Shirt: " + (partCount > 1 ? parts[1] : "N/A") + "\n";
-    formatted += "Pants: " + (partCount > 2 ? parts[2] : "N/A") + "\n";
-    formatted += "Shoes: " + (partCount > 3 ? parts[3] : "N/A") + "\n";
-    formatted += "Item: " + (partCount > 4 ? parts[4] : "N/A") + "\n"; // Add extra newline for separation
-
-    bool success = file.print(formatted);
-    if (success) {
-        DEBUG_PRINTF("Entry appended:\n%s", formatted.c_str());
-        updateStatus("Entry Saved", 0x00FF00);
-    } else {
-        DEBUG_PRINT("Failed to append entry");
-        updateStatus("Save Failed", 0xFF0000);
-    }
-
+    String formattedEntry = timestamp + ": " + entry; // e.g., "05-Mar-2025 14:31:53: Male,Blue+Green+Red+Orange,..."
+    DEBUG_PRINTF("Raw entry text: %s\n", formattedEntry.c_str());
+    size_t bytesWritten = file.println(formattedEntry);
     file.close();
+    
     SPI_SD.end();
     SPI.begin();
-    return success;
+    pinMode(TFT_DC, OUTPUT);
+    digitalWrite(TFT_DC, HIGH);
+    
+    if (bytesWritten == 0) {
+        DEBUG_PRINT("Failed to write to log file");
+        return false;
+    }
+    
+    DEBUG_PRINTF("Entry saved to file (%d bytes): %s\n", bytesWritten, formattedEntry.c_str());
+    return true;
 }
 
 // Save entry to SD card and send to Zapier if connected
 void saveEntry(const String& entry) {
+    Serial.println("New Entry:");
+    Serial.println(entry);
+    
     bool saved = appendToLog(entry); // Save to SD card
-    if (saved && wifiManager.isConnected()) {
-        sendWebhook(entry); // Send to Zapier if WiFi is connected
-    }
-    if (saved) {
-        listSavedEntries(); // Refresh the log display
+    
+    if (WiFi.status() == WL_CONNECTED) {
+        sendWebhook(entry); // Send to Discord
+        if (saved) {
+            updateStatus("Entry Saved & Sent", 0x00FF00);
+        } else {
+            updateStatus("Error Saving Entry", 0xFF0000);
+        }
     } else {
-        DEBUG_PRINT("Failed to save entry to SD card");
+        if (saved) {
+            updateStatus("Offline: Entry Saved Locally", 0xFFFF00);
+        } else {
+            updateStatus("Error: Failed to Save Entry", 0xFF0000);
+        }
     }
 }
 
 void createViewLogsScreen() {
-    if (view_logs_screen) {
-        lv_obj_del(view_logs_screen);
-        view_logs_screen = nullptr;
-    }
-    view_logs_screen = lv_obj_create(NULL);
-    lv_obj_add_style(view_logs_screen, &style_screen, 0);
-    lv_obj_set_style_bg_color(view_logs_screen, lv_color_hex(0x1A1A1A), 0);
-    lv_obj_set_style_bg_opa(view_logs_screen, LV_OPA_COVER, 0);
-    DEBUG_PRINT("View Logs screen created");
+    DEBUG_PRINT("Creating new view logs screen");
 
-    lv_obj_t* header = lv_obj_create(view_logs_screen);
+    parsedLogEntries.clear();
+
+    lv_obj_t* logs_screen = lv_obj_create(NULL);
+    lv_obj_add_style(logs_screen, &style_screen, 0);
+
+    lv_obj_t* header = lv_obj_create(logs_screen);
     lv_obj_set_size(header, SCREEN_WIDTH, 40);
+    lv_obj_set_pos(header, 0, 0);
     lv_obj_set_style_bg_color(header, lv_color_hex(0x333333), 0);
-    lv_obj_set_style_bg_opa(header, LV_OPA_COVER, 0);
-    lv_obj_clear_flag(header, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_t* title = lv_label_create(header);
-    lv_label_set_text(title, "View Logs");
+    lv_label_set_text(title, "Log Entries - Last 3 Days");
     lv_obj_add_style(title, &style_title, 0);
-    lv_obj_align(title, LV_ALIGN_CENTER, 0, 0);
+    lv_obj_center(title);
 
-    lv_obj_t* date_container = lv_obj_create(view_logs_screen);
-    lv_obj_set_size(date_container, SCREEN_WIDTH - 20, 50);
-    lv_obj_align(date_container, LV_ALIGN_TOP_MID, 0, 50);
-    lv_obj_set_style_bg_opa(date_container, LV_OPA_TRANSP, 0);
+    lv_obj_t* tabview = lv_tabview_create(logs_screen, LV_DIR_TOP, 30);
+    lv_obj_set_size(tabview, SCREEN_WIDTH, SCREEN_HEIGHT - 40);
+    lv_obj_align(tabview, LV_ALIGN_BOTTOM_MID, 0, 0);
+    lv_obj_set_style_bg_color(tabview, lv_color_hex(0x2D2D2D), 0);
 
-    static lv_calendar_date_t selected_date;
-    m5::rtc_date_t DateStruct;
-    M5.Rtc.getDate(&DateStruct);
-    selected_date.year = DateStruct.year;
-    selected_date.month = DateStruct.month;
-    selected_date.day = DateStruct.date;
+    time_t now;
+    time(&now);
+    struct tm* timeinfo = localtime(&now);
+    char current_time[25]; // Increased size for new format
+    strftime(current_time, sizeof(current_time), "%d-%b-%Y %H:%M:%S", timeinfo);
+    DEBUG_PRINTF("Current system time: %s\n", current_time);
 
-    lv_obj_t* date_label = lv_label_create(date_container);
-    char date_str[32];
-    snprintf(date_str, sizeof(date_str), "Date: %02d-%02d-%04d", selected_date.day, selected_date.month, selected_date.year);
-    lv_label_set_text(date_label, date_str);
-    lv_obj_set_style_text_font(date_label, &lv_font_montserrat_16, 0);
-    lv_obj_set_style_text_color(date_label, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_align(date_label, LV_ALIGN_LEFT_MID, 10, 0);
+    if (!fileSystemInitialized) {
+        DEBUG_PRINT("Filesystem not initialized, attempting to initialize");
+        initFileSystem();
+    }
 
-    lv_obj_t* date_btn = lv_btn_create(date_container);
-    lv_obj_set_size(date_btn, 100, 30);
-    lv_obj_align(date_btn, LV_ALIGN_RIGHT_MID, -10, 0);
-    lv_obj_add_style(date_btn, &style_btn, 0);
-    lv_obj_add_style(date_btn, &style_btn_pressed, LV_STATE_PRESSED);
-    lv_obj_t* date_btn_label = lv_label_create(date_btn);
-    lv_label_set_text(date_btn_label, "Change");
-    lv_obj_center(date_btn_label);
-    lv_obj_add_event_cb(date_btn, [](lv_event_t* e) {
-        lv_obj_t* calendar = lv_calendar_create(lv_scr_act());
-        lv_obj_set_size(calendar, 280, 160);
-        lv_obj_align(calendar, LV_ALIGN_CENTER, 0, 0);
-        m5::rtc_date_t DateStruct;
-        M5.Rtc.getDate(&DateStruct);
-        lv_calendar_set_today_date(calendar, DateStruct.year, DateStruct.month, DateStruct.date);
-        lv_calendar_set_showed_date(calendar, DateStruct.year, DateStruct.month);
+    if (fileSystemInitialized) {
+        SPI.end();
+        delay(100);
+        SPI_SD.begin(SD_SPI_SCK_PIN, SD_SPI_MISO_PIN, SD_SPI_MOSI_PIN, SD_SPI_CS_PIN);
+        digitalWrite(SD_SPI_CS_PIN, HIGH);
+        delay(100);
 
-        lv_obj_add_event_cb(calendar, [](lv_event_t* e) {
-            lv_calendar_date_t date;
-            if (lv_calendar_get_pressed_date(lv_event_get_target(e), &date)) {
-                if (date.year > 0 && date.month > 0 && date.day > 0) {
-                    selected_date = date;
-                    lv_obj_del(lv_event_get_target(e));
-                    createViewLogsScreen();
+        if (!SD.exists(LOG_FILENAME)) {
+            File file = SD.open(LOG_FILENAME, FILE_WRITE);
+            if (file) {
+                file.println("# Loss Prevention Log - Created " + getTimestamp());
+                file.close();
+                DEBUG_PRINT("Created new log file");
+            }
+        }
+
+        File log_file = SD.open(LOG_FILENAME, FILE_READ);
+        if (log_file) {
+            DEBUG_PRINT("Reading log file anew...");
+            while (log_file.available()) {
+                String line = log_file.readStringUntil('\n');
+                line.trim();
+                if (line.length() > 0 && !line.startsWith("#")) {
+                    time_t timestamp = parseTimestamp(line);
+                    if (timestamp != 0) {
+                        parsedLogEntries.push_back({line, timestamp});
+                        DEBUG_PRINTF("Parsed entry: %s\n", line.c_str());
+                    } else {
+                        DEBUG_PRINTF("Failed to parse timestamp: %s\n", line.c_str());
+                    }
                 }
             }
-        }, LV_EVENT_VALUE_CHANGED, NULL);
-    }, LV_EVENT_CLICKED, NULL);
-
-    lv_obj_t* container = lv_obj_create(view_logs_screen);
-    lv_obj_set_size(container, SCREEN_WIDTH - 20, SCREEN_HEIGHT - 140);
-    lv_obj_align(container, LV_ALIGN_TOP_MID, 0, 110);
-    lv_obj_set_style_bg_color(container, lv_color_hex(0x2D2D2D), 0);
-    lv_obj_set_style_bg_opa(container, LV_OPA_COVER, 0);
-    lv_obj_add_flag(container, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_set_scroll_dir(container, LV_DIR_VER);
-    lv_obj_set_scrollbar_mode(container, LV_SCROLLBAR_MODE_ACTIVE);
-    current_scroll_obj = container;
-
-    listSavedEntries();
-    persistentLogEntries.clear();
-
-    struct tm selected_tm = {0};
-    selected_tm.tm_year = selected_date.year - 1900;
-    selected_tm.tm_mon = selected_date.month - 1;
-    selected_tm.tm_mday = selected_date.day;
-    time_t selected_time = mktime(&selected_tm);
-
-    for (const auto& entry : parsedLogEntries) {
-        struct tm* entry_tm = localtime(&entry.timestamp);
-        if (entry_tm->tm_year == selected_tm.tm_year &&
-            entry_tm->tm_mon == selected_tm.tm_mon &&
-            entry_tm->tm_mday == selected_tm.tm_mday) {
-            persistentLogEntries.push_back(entry);
+            log_file.close();
+            DEBUG_PRINTF("Read %d valid log entries from file\n", parsedLogEntries.size());
+        } else {
+            DEBUG_PRINT("Failed to open log file for reading");
         }
-    }
-    DEBUG_PRINTF("Filtered %zu entries for date %04d-%02d-%02d\n", persistentLogEntries.size(),
-                 selected_date.year, selected_date.month, selected_date.day);
 
-    if (persistentLogEntries.empty()) {
-        lv_obj_t* no_logs_label = lv_label_create(container);
-        lv_label_set_text(no_logs_label, "No entries for this date");
-        lv_obj_set_style_text_font(no_logs_label, &lv_font_montserrat_14, 0);
-        lv_obj_set_style_text_color(no_logs_label, lv_color_hex(0xFFFFFF), 0);
-        lv_obj_align(no_logs_label, LV_ALIGN_CENTER, 0, 0);
-    } else {
-        int y_offset = 0;
-        for (size_t i = 0; i < persistentLogEntries.size(); i++) {
-            lv_obj_t* log_btn = lv_btn_create(container);
-            lv_obj_set_size(log_btn, SCREEN_WIDTH - 40, 40);
-            lv_obj_set_pos(log_btn, 0, y_offset);
-            lv_obj_add_style(log_btn, &style_btn, 0);
-            lv_obj_add_style(log_btn, &style_btn_pressed, LV_STATE_PRESSED);
-
-            char time_str[25];
-            struct tm* timeinfo = localtime(&persistentLogEntries[i].timestamp);
-            strftime(time_str, sizeof(time_str), "[%d-%m-%Y %I:%M:%S %p]", timeinfo);
-            lv_obj_t* log_label = lv_label_create(log_btn);
-            lv_label_set_text(log_label, time_str);
-            lv_obj_set_style_text_font(log_label, &lv_font_montserrat_14, 0);
-            lv_obj_set_style_text_color(log_label, lv_color_hex(0xFFFFFF), 0);
-            lv_obj_align(log_label, LV_ALIGN_LEFT_MID, 10, 0);
-
-            lv_obj_set_user_data(log_btn, (void*)&persistentLogEntries[i]);
-
-            lv_obj_add_event_cb(log_btn, [](lv_event_t* e) {
-                lv_obj_t* btn = lv_event_get_target(e);
-                LogEntry* entry = (LogEntry*)lv_obj_get_user_data(btn);
-                if (entry == nullptr) {
-                    DEBUG_PRINT("Error: Null log entry pointer");
-                    return;
-                }
-                String fullDetails = entry->text;
-                DEBUG_PRINTF("Showing log details:\n%s\n", fullDetails.c_str());
-                static const char* btns[] = {"Close", ""};
-                lv_obj_t* msgbox = lv_msgbox_create(NULL, "Log Entry Details", fullDetails.c_str(), btns, true);
-                lv_obj_set_width(msgbox, SCREEN_WIDTH - 40);
-                lv_obj_set_height(msgbox, 200);
-                lv_obj_set_style_text_font(msgbox, &lv_font_montserrat_14, 0);
-                lv_obj_center(msgbox);
-            }, LV_EVENT_CLICKED, NULL);
-
-            y_offset += 50;
-        }
+        SPI_SD.end();
+        SPI.begin();
+        pinMode(TFT_DC, OUTPUT);
+        digitalWrite(TFT_DC, HIGH);
     }
 
-    lv_obj_t* back_btn = lv_btn_create(view_logs_screen);
-    lv_obj_set_size(back_btn, 100, 40);
-    lv_obj_align(back_btn, LV_ALIGN_BOTTOM_MID, 0, -10);
+    char tab_names[3][16];
+    lv_obj_t* tabs[3];
+    std::vector<LogEntry*> entries_by_day[3];
+
+    for (int i = 0; i < 3; i++) {
+        struct tm day_time = *timeinfo;
+        day_time.tm_mday -= i;
+        day_time.tm_hour = 0;
+        day_time.tm_min = 0;
+        day_time.tm_sec = 0;
+        mktime(&day_time);
+
+        strftime(tab_names[i], sizeof(tab_names[i]), "%m/%d/%y", &day_time);
+        tabs[i] = lv_tabview_add_tab(tabview, tab_names[i]);
+
+        time_t day_start = mktime(&day_time);
+        day_time.tm_hour = 23;
+        day_time.tm_min = 59;
+        day_time.tm_sec = 59;
+        mktime(&day_time);
+        time_t day_end = mktime(&day_time);
+
+        char day_start_str[25], day_end_str[25];
+        strftime(day_start_str, sizeof(day_start_str), "%d-%b-%Y %H:%M:%S", localtime(&day_start));
+        strftime(day_end_str, sizeof(day_end_str), "%d-%b-%Y %H:%M:%S", localtime(&day_end));
+        DEBUG_PRINTF("Filtering %s: %s to %s\n", tab_names[i], day_start_str, day_end_str);
+
+        for (auto& entry : parsedLogEntries) {
+            if (entry.timestamp >= day_start && entry.timestamp <= day_end) {
+                entries_by_day[i].push_back(&entry);
+                DEBUG_PRINTF("Matched entry for %s: %s\n", tab_names[i], entry.text.c_str());
+            }
+        }
+
+        std::sort(entries_by_day[i].begin(), entries_by_day[i].end(), 
+            [](const LogEntry* a, const LogEntry* b) {
+                return a->timestamp < b->timestamp;
+            });
+
+        DEBUG_PRINTF("Day %s: %d entries\n", tab_names[i], entries_by_day[i].size());
+    }
+
+    for (int i = 0; i < 3; i++) {
+        lv_obj_t* container = lv_obj_create(tabs[i]);
+        lv_obj_set_size(container, SCREEN_WIDTH - 20, SCREEN_HEIGHT - 70);
+        lv_obj_align(container, LV_ALIGN_TOP_MID, 0, 0);
+        lv_obj_set_style_bg_opa(container, LV_OPA_TRANSP, 0);
+        lv_obj_set_scroll_dir(container, LV_DIR_VER);
+        lv_obj_set_scrollbar_mode(container, LV_SCROLLBAR_MODE_AUTO);
+        lv_obj_add_flag(container, LV_OBJ_FLAG_SCROLLABLE);
+
+        if (entries_by_day[i].empty()) {
+            lv_obj_t* no_logs = lv_label_create(container);
+            lv_label_set_text(no_logs, "No entries for this day");
+            lv_obj_add_style(no_logs, &style_text, 0);
+            lv_obj_center(no_logs);
+        } else {
+            int y_pos = 0;
+            int entry_num = 1;
+            for (const auto* entry : entries_by_day[i]) {
+                lv_obj_t* entry_btn = lv_btn_create(container);
+                lv_obj_set_size(entry_btn, SCREEN_WIDTH - 30, 25);
+                lv_obj_set_pos(entry_btn, 5, y_pos);
+                lv_obj_add_style(entry_btn, &style_btn, 0);
+                lv_obj_add_style(entry_btn, &style_btn_pressed, LV_STATE_PRESSED);
+                lv_obj_set_style_bg_color(entry_btn, lv_color_hex(0x3A3A3A), 0);
+
+                struct tm* entry_time = localtime(&entry->timestamp);
+                char time_str[16];
+                strftime(time_str, sizeof(time_str), "%H:%M", entry_time);
+                String entry_label = "Entry " + String(entry_num++) + ": " + String(time_str);
+
+                lv_obj_t* label = lv_label_create(entry_btn);
+                lv_label_set_text(label, entry_label.c_str());
+                lv_obj_add_style(label, &style_text, 0);
+                lv_obj_align(label, LV_ALIGN_LEFT_MID, 5, 0);
+
+                lv_obj_set_user_data(entry_btn, (void*)entry);
+
+                lv_obj_add_event_cb(entry_btn, [](lv_event_t* e) {
+                    lv_obj_t* btn = lv_event_get_target(e);
+                    LogEntry* entry = (LogEntry*)lv_obj_get_user_data(btn);
+                    if (entry) {
+                        DEBUG_PRINTF("Raw entry text: %s\n", entry->text.c_str());
+                        int colon_pos = entry->text.indexOf(": ");
+                        if (colon_pos != -1) {
+                            String entry_data = entry->text.substring(colon_pos + 2); // Extract raw data after timestamp
+                            DEBUG_PRINTF("Extracted entry data: %s\n", entry_data.c_str());
+                            String formatted_entry = getFormattedEntry(entry_data);
+                            DEBUG_PRINTF("Formatted: %s\n", formatted_entry.c_str());
+                            lv_obj_t* msgbox = lv_msgbox_create(NULL, "Log Entry Details", 
+                                formatted_entry.c_str(), NULL, true);
+                            lv_obj_set_size(msgbox, 280, 180);
+                            lv_obj_center(msgbox);
+                            lv_obj_set_style_text_font(lv_msgbox_get_text(msgbox), &lv_font_montserrat_14, 0);
+                        } else {
+                            DEBUG_PRINT("No colon found in entry text");
+                            lv_obj_t* msgbox = lv_msgbox_create(NULL, "Error", 
+                                "Invalid log entry format", NULL, true);
+                            lv_obj_set_size(msgbox, 280, 180);
+                            lv_obj_center(msgbox);
+                        }
+                    }
+                }, LV_EVENT_CLICKED, NULL);
+
+                y_pos += 30;
+            }
+        }
+    }
+
+    lv_obj_t* back_btn = lv_btn_create(logs_screen);
+    lv_obj_set_size(back_btn, 80, 40);
+    lv_obj_align(back_btn, LV_ALIGN_TOP_LEFT, 10, 0);
     lv_obj_add_style(back_btn, &style_btn, 0);
     lv_obj_add_style(back_btn, &style_btn_pressed, LV_STATE_PRESSED);
     lv_obj_t* back_label = lv_label_create(back_btn);
-    lv_label_set_text(back_label, "Back");
+    lv_label_set_text(back_label, LV_SYMBOL_LEFT " Back");
     lv_obj_center(back_label);
+    lv_obj_move_foreground(back_btn);
+
     lv_obj_add_event_cb(back_btn, [](lv_event_t* e) {
+        DEBUG_PRINT("Returning to main menu from logs");
         createMainMenu();
     }, LV_EVENT_CLICKED, NULL);
 
-    addStatusBar(view_logs_screen);
-    if (persistentLogEntries.empty()) {
-        updateStatus("No logs for this date", 0xFFFF00);
-    } else {
-        char status[32];
-        snprintf(status, sizeof(status), "%zu logs loaded", persistentLogEntries.size());
-        updateStatus(status, 0x00FF00);
-    }
+    lv_obj_t* reset_btn = lv_btn_create(logs_screen);
+    lv_obj_set_size(reset_btn, 80, 40);
+    lv_obj_align(reset_btn, LV_ALIGN_TOP_RIGHT, -10, 0);
+    lv_obj_add_style(reset_btn, &style_btn, 0);
+    lv_obj_add_style(reset_btn, &style_btn_pressed, LV_STATE_PRESSED);
+    lv_obj_t* reset_label = lv_label_create(reset_btn);
+    lv_label_set_text(reset_label, "Reset");
+    lv_obj_center(reset_label);
+    lv_obj_move_foreground(reset_btn);
 
-    lv_scr_load(view_logs_screen);
+    lv_obj_add_event_cb(reset_btn, [](lv_event_t* e) {
+        static const char* btns[] = {"Yes", "No", ""};
+        lv_obj_t* msgbox = lv_msgbox_create(NULL, "Confirm Reset", 
+            "Are you sure you want to delete all log entries?", btns, false);
+        lv_obj_set_size(msgbox, 250, 150);
+        lv_obj_center(msgbox);
+
+        lv_obj_add_event_cb(msgbox, [](lv_event_t* e) {
+            lv_obj_t* obj = lv_event_get_current_target(e);
+            const char* btn_text = lv_msgbox_get_active_btn_text(obj);
+            if (btn_text && strcmp(btn_text, "Yes") == 0) {
+                SPI.end();
+                delay(100);
+                SPI_SD.begin(SD_SPI_SCK_PIN, SD_SPI_MISO_PIN, SD_SPI_MOSI_PIN, SD_SPI_CS_PIN);
+                digitalWrite(SD_SPI_CS_PIN, HIGH);
+                delay(100);
+
+                if (SD.remove(LOG_FILENAME)) {
+                    File file = SD.open(LOG_FILENAME, FILE_WRITE);
+                    if (file) {
+                        file.println("# Loss Prevention Log - Reset " + getTimestamp());
+                        file.close();
+                        DEBUG_PRINT("Log file reset successfully");
+                    }
+                } else {
+                    DEBUG_PRINT("Failed to reset log file");
+                }
+
+                SPI_SD.end();
+                SPI.begin();
+                pinMode(TFT_DC, OUTPUT);
+                digitalWrite(TFT_DC, HIGH);
+
+                parsedLogEntries.clear();
+                lv_obj_t* screen_to_delete = lv_scr_act();
+                createViewLogsScreen();
+                if (screen_to_delete && screen_to_delete != lv_scr_act()) {
+                    lv_obj_del(screen_to_delete);
+                }
+            }
+            lv_msgbox_close(obj);
+        }, LV_EVENT_VALUE_CHANGED, NULL);
+    }, LV_EVENT_CLICKED, NULL);
+
+    lv_scr_load(logs_screen);
+    lv_timer_handler();
+    DEBUG_PRINT("View logs screen created successfully");
 }
 
 // Function to release SPI bus
@@ -649,33 +760,75 @@ void releaseSPIBus() {
 
 // SPI-safe file system initialization
 void initFileSystem() {
-    if (fileSystemInitialized) return;
+    if (fileSystemInitialized) {
+        DEBUG_PRINT("File system already initialized");
+        return;
+    }
+    
     DEBUG_PRINT("Initializing SD card...");
     
-    WiFi.disconnect(); // Ensure WiFi is off during SPI switch
+    // Stop the default SPI (used by LCD)
     SPI.end();
-    delay(200);
-    SPI_SD.begin(SD_SPI_SCK_PIN, SD_SPI_MISO_PIN, SD_SPI_MOSI_PIN, -1);
-    pinMode(SD_SPI_CS_PIN, OUTPUT);
-    digitalWrite(SD_SPI_CS_PIN, HIGH);
-    delay(200);
-
+    delay(200); // Give it a moment to settle
+    
+    // Start custom SPI for SD card
+    SPI_SD.begin(SD_SPI_SCK_PIN, SD_SPI_MISO_PIN, SD_SPI_MOSI_PIN, -1); // -1 means no default CS
+    pinMode(SD_SPI_CS_PIN, OUTPUT); // Set CS pin (4) as OUTPUT
+    digitalWrite(SD_SPI_CS_PIN, HIGH); // Deselect SD card (HIGH = off)
+    delay(200); // Wait for SD card to stabilize
+    
     bool sdInitialized = false;
+    
+    // Try initializing the SD card up to 3 times
     for (int i = 0; i < 3 && !sdInitialized; i++) {
-        sdInitialized = SD.begin(SD_SPI_CS_PIN, SPI_SD, 2000000);
-        if (!sdInitialized) delay(100);
+        DEBUG_PRINTF("Attempt %d: Initializing SD at 2 MHz...\n", i + 1);
+        sdInitialized = SD.begin(SD_SPI_CS_PIN, SPI_SD, 2000000); // CS=4, custom SPI, 2 MHz
+        if (!sdInitialized) {
+            DEBUG_PRINTF("Attempt %d failed\n", i + 1);
+            delay(100); // Short delay before retrying
+        }
     }
-
+    
     if (!sdInitialized) {
-        DEBUG_PRINT("SD card initialization failed");
+        DEBUG_PRINT("All SD card initialization attempts failed");
+        // Show error message on screen
         lv_obj_t* msgbox = lv_msgbox_create(NULL, "Storage Error", 
-            "SD card initialization failed.", NULL, true);
+            "SD card initialization failed. Please check the card.", NULL, true);
+        lv_obj_set_size(msgbox, 280, 150);
         lv_obj_center(msgbox);
-    } else {
-        fileSystemInitialized = true;
-        DEBUG_PRINT("SD card initialized successfully");
+        
+        // Clean up and switch back to LCD mode
+        SPI_SD.end();
+        SPI.begin();
+        pinMode(TFT_DC, OUTPUT);
+        digitalWrite(TFT_DC, HIGH);
+        return;
     }
-
+    
+    DEBUG_PRINT("SD card initialized successfully");
+    fileSystemInitialized = true;
+    
+    // Check card type and print info
+    uint8_t cardType = SD.cardType();
+    if (cardType == CARD_NONE) {
+        DEBUG_PRINT("No SD card attached");
+    } else {
+        DEBUG_PRINT("SD Card Type: ");
+        if (cardType == CARD_MMC) {
+            DEBUG_PRINT("MMC");
+        } else if (cardType == CARD_SD) {
+            DEBUG_PRINT("SDSC");
+        } else if (cardType == CARD_SDHC) {
+            DEBUG_PRINT("SDHC");
+        } else {
+            DEBUG_PRINT("UNKNOWN");
+        }
+        
+        uint64_t cardSize = SD.cardSize() / (1024 * 1024);
+        DEBUG_PRINTF("SD Card Size: %lluMB\n", cardSize);
+    }
+    
+    // Switch back to LCD mode after initialization
     SPI_SD.end();
     SPI.begin();
     pinMode(TFT_DC, OUTPUT);
@@ -1874,235 +2027,129 @@ void createColorMenuShoes() {
 
 void createItemMenu() {
     if (itemMenu) {
+        DEBUG_PRINT("Cleaning existing item menu");
         lv_obj_del(itemMenu);
         itemMenu = nullptr;
     }
     itemMenu = lv_obj_create(NULL);
     lv_obj_add_style(itemMenu, &style_screen, 0);
+    lv_scr_load(itemMenu);
     DEBUG_PRINTF("Item menu created: %p\n", itemMenu);
+    
+    lv_timer_handler(); // Process any pending UI updates
 
-    lv_obj_t* header = lv_obj_create(itemMenu);
-    lv_obj_set_size(header, SCREEN_WIDTH, 40);
+    lv_obj_t *header = lv_obj_create(itemMenu);
+    lv_obj_set_size(header, 320, 50);
     lv_obj_set_style_bg_color(header, lv_color_hex(0x333333), 0);
-    lv_obj_set_style_bg_opa(header, LV_OPA_COVER, 0);
-    lv_obj_clear_flag(header, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_t* title = lv_label_create(header);
+    lv_obj_t *title = lv_label_create(header);
     lv_label_set_text(title, "Select Item");
     lv_obj_add_style(title, &style_title, 0);
     lv_obj_align(title, LV_ALIGN_CENTER, 0, 0);
 
-    item_list = lv_list_create(itemMenu);
-    lv_obj_set_size(item_list, SCREEN_WIDTH - 20, SCREEN_HEIGHT - 100);
-    lv_obj_align(item_list, LV_ALIGN_TOP_MID, 0, 50);
-    lv_obj_add_style(item_list, &style_text, 0);
+    lv_obj_t *list_cont = lv_obj_create(itemMenu);
+    lv_obj_set_size(list_cont, 280, 180);
+    lv_obj_align(list_cont, LV_ALIGN_TOP_MID, 0, 60);
+    lv_obj_set_style_bg_color(list_cont, lv_color_hex(0x4A4A4A), 0);
+    
+    lv_obj_set_flex_flow(list_cont, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_all(list_cont, 5, 0);
+    lv_obj_set_scroll_dir(list_cont, LV_DIR_VER);
+    lv_obj_set_scroll_snap_y(list_cont, LV_SCROLL_SNAP_CENTER);
+    lv_obj_set_scrollbar_mode(list_cont, LV_SCROLLBAR_MODE_ACTIVE);
+    lv_obj_clear_flag(list_cont, LV_OBJ_FLAG_SCROLL_ELASTIC);
+    lv_obj_add_flag(list_cont, LV_OBJ_FLAG_SCROLL_MOMENTUM | LV_OBJ_FLAG_SCROLLABLE);
 
-    for (int i = 0; i < sizeof(items) / sizeof(items[0]); i++) {
-        lv_obj_t* btn = lv_list_add_btn(item_list, LV_SYMBOL_RIGHT, items[i]);
+    for (int i = 0; i < 7; i++) {
+        lv_obj_t *btn = lv_btn_create(list_cont);
+        lv_obj_set_width(btn, lv_pct(100));
+        lv_obj_set_height(btn, 40);
         lv_obj_add_style(btn, &style_btn, 0);
-        lv_obj_add_event_cb(btn, [](lv_event_t* e) {
-            const char* text = lv_list_get_btn_text(item_list, lv_event_get_target(e));
-            selectedItem = String(text);
-            DEBUG_PRINTF("Item selected: %s at %lu\n", selectedItem.c_str(), millis());
-            if (selectedItem.length() > 0) {
-                createConfirmScreen();
-            } else {
-                DEBUG_PRINT("Item selection failed - empty string");
-            }
+        lv_obj_add_style(btn, &style_btn_pressed, LV_STATE_PRESSED);
+        lv_obj_t *label = lv_label_create(btn);
+        lv_label_set_text(label, items[i]);
+        lv_obj_center(label);
+        lv_obj_add_event_cb(btn, [](lv_event_t *e) {
+            currentEntry += String(lv_label_get_text(lv_obj_get_child(lv_event_get_target(e), 0)));
+            delay(100);
+            createConfirmScreen();
         }, LV_EVENT_CLICKED, NULL);
     }
-
-    lv_obj_t* back_btn = lv_btn_create(itemMenu);
-    lv_obj_set_size(back_btn, 100, 40);
-    lv_obj_align(back_btn, LV_ALIGN_BOTTOM_MID, 0, -10);
-    lv_obj_add_style(back_btn, &style_btn, 0);
-    lv_obj_add_style(back_btn, &style_btn_pressed, LV_STATE_PRESSED);
-    lv_obj_t* back_label = lv_label_create(back_btn);
-    lv_label_set_text(back_label, "Back");
-    lv_obj_center(back_label);
-    lv_obj_add_event_cb(back_btn, [](lv_event_t* e) {
-        createColorMenuShoes();
-    }, LV_EVENT_CLICKED, NULL);
-
-    lv_scr_load(itemMenu);
 }
 
 void createConfirmScreen() {
+    DEBUG_PRINT("Creating confirmation screen");
+    
+    // Clean up any existing confirm screen first
     if (confirmScreen) {
+        DEBUG_PRINT("Cleaning existing confirm screen");
         lv_obj_del(confirmScreen);
         confirmScreen = nullptr;
+        lv_timer_handler(); // Process deletion immediately
     }
+    
+    // Create new confirmation screen
     confirmScreen = lv_obj_create(NULL);
+    if (!confirmScreen) {
+        DEBUG_PRINT("Failed to create confirmation screen");
+        createMainMenu(); // Fallback to main menu
+        return;
+    }
+    
     lv_obj_add_style(confirmScreen, &style_screen, 0);
-    lv_obj_set_style_bg_color(confirmScreen, lv_color_hex(0x1A1A1A), 0);
-    lv_obj_set_style_bg_opa(confirmScreen, LV_OPA_COVER, 0);
+    lv_scr_load(confirmScreen);
+    DEBUG_PRINTF("Confirm screen created: %p\n", confirmScreen);
+    
+    lv_timer_handler(); // Process any pending UI updates
 
-    // Debug selections
-    DEBUG_PRINTF("Gender: %s\n", selectedGender.c_str());
-    DEBUG_PRINTF("Shirt: %s\n", selectedShirtColors.c_str());
-    DEBUG_PRINTF("Pants: %s\n", selectedPantsColors.c_str());
-    DEBUG_PRINTF("Shoes: %s\n", selectedShoesColors.c_str());
-    DEBUG_PRINTF("Item: %s\n", selectedItem.c_str());
-
-    // Header
-    lv_obj_t* header = lv_obj_create(confirmScreen);
-    lv_obj_set_size(header, SCREEN_WIDTH, 40);
+    lv_obj_t *header = lv_obj_create(confirmScreen);
+    lv_obj_set_size(header, 320, 50);
     lv_obj_set_style_bg_color(header, lv_color_hex(0x333333), 0);
-    lv_obj_set_style_bg_opa(header, LV_OPA_COVER, 0);
-    lv_obj_t* title = lv_label_create(header);
+    lv_obj_t *title = lv_label_create(header);
     lv_label_set_text(title, "Confirm Entry");
     lv_obj_add_style(title, &style_title, 0);
     lv_obj_align(title, LV_ALIGN_CENTER, 0, 0);
 
-    // Details Container
-    lv_obj_t* container = lv_obj_create(confirmScreen);
-    lv_obj_set_size(container, SCREEN_WIDTH - 20, SCREEN_HEIGHT - 140);
-    lv_obj_align(container, LV_ALIGN_TOP_MID, 0, 50);
-    lv_obj_set_style_bg_color(container, lv_color_hex(0x2D2D2D), 0);
-    lv_obj_set_style_bg_opa(container, LV_OPA_COVER, 0);
+    // Create a local copy of the formatted entry to avoid memory issues
+    String formattedEntryStr = getFormattedEntry(currentEntry);
+    
+    lv_obj_t *preview = lv_label_create(confirmScreen);
+    lv_label_set_text(preview, formattedEntryStr.c_str());
+    lv_obj_add_style(preview, &style_text, 0);
+    lv_obj_set_size(preview, 280, 140);
+    lv_obj_align(preview, LV_ALIGN_TOP_MID, 0, 60);
+    lv_obj_set_style_bg_color(preview, lv_color_hex(0x4A4A4A), 0);
+    lv_obj_set_style_pad_all(preview, 10, 0);
 
-    // Build entry string with safety
-    String entry = "Time: ";
-    String timestamp = getTimestamp();
-    if (timestamp.isEmpty()) {
-        entry += "N/A";
-    } else {
-        entry += timestamp;
-    }
-    entry += "\nGender: " + (selectedGender.isEmpty() ? "N/A" : selectedGender) + "\n";
-    entry += "Shirt: " + (selectedShirtColors.isEmpty() ? "N/A" : selectedShirtColors) + "\n";
-    entry += "Pants: " + (selectedPantsColors.isEmpty() ? "N/A" : selectedPantsColors) + "\n";
-    entry += "Shoes: " + (selectedShoesColors.isEmpty() ? "N/A" : selectedShoesColors) + "\n";
-    entry += "Item: " + (selectedItem.isEmpty() ? "N/A" : selectedItem);
-    DEBUG_PRINTF("Entry string: %s\n", entry.c_str()); // Debug the final string
+    lv_obj_t *btn_container = lv_obj_create(confirmScreen);
+    lv_obj_remove_style_all(btn_container);
+    lv_obj_set_size(btn_container, 320, 50);
+    lv_obj_align(btn_container, LV_ALIGN_BOTTOM_MID, 0, -10);
+    lv_obj_set_flex_flow(btn_container, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(btn_container, LV_FLEX_ALIGN_SPACE_EVENLY, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
 
-    lv_obj_t* details_label = lv_label_create(container);
-    if (entry.length() > 0) {
-        lv_label_set_text(details_label, entry.c_str());
-    } else {
-        lv_label_set_text(details_label, "No data available");
-    }
-    lv_obj_set_style_text_font(details_label, &lv_font_montserrat_14, 0);
-    lv_obj_set_style_text_color(details_label, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_align(details_label, LV_ALIGN_TOP_LEFT, 10, 10);
-
-    // Back Button
-    lv_obj_t* back_btn = lv_btn_create(confirmScreen);
-    lv_obj_set_size(back_btn, 100, 40);
-    lv_obj_align(back_btn, LV_ALIGN_BOTTOM_LEFT, 10, -10);
-    lv_obj_add_style(back_btn, &style_btn, 0);
-    lv_obj_add_style(back_btn, &style_btn_pressed, LV_STATE_PRESSED);
-    lv_obj_t* back_label = lv_label_create(back_btn);
-    lv_label_set_text(back_label, "Back");
-    lv_obj_center(back_label);
-    lv_obj_add_event_cb(back_btn, [](lv_event_t* e) {
-        createColorMenuShoes();
-    }, LV_EVENT_CLICKED, NULL);
-
-    // Confirm Button
-    lv_obj_t* confirm_btn = lv_btn_create(confirmScreen);
-    lv_obj_set_size(confirm_btn, 100, 40);
-    lv_obj_align(confirm_btn, LV_ALIGN_BOTTOM_RIGHT, -10, -10);
-    lv_obj_add_style(confirm_btn, &style_btn, 0);
-    lv_obj_add_style(confirm_btn, &style_btn_pressed, LV_STATE_PRESSED);
-    lv_obj_t* confirm_label = lv_label_create(confirm_btn);
+    // Create a local copy of the current entry for the event callbacks
+    String entryToSave = currentEntry;
+    
+    lv_obj_t *btn_confirm = lv_btn_create(btn_container);
+    lv_obj_set_size(btn_confirm, 120, 40);
+    lv_obj_add_style(btn_confirm, &style_btn, 0);
+    lv_obj_add_style(btn_confirm, &style_btn_pressed, LV_STATE_PRESSED);
+    lv_obj_t *confirm_label = lv_label_create(btn_confirm);
     lv_label_set_text(confirm_label, "Confirm");
     lv_obj_center(confirm_label);
-    lv_obj_add_event_cb(confirm_btn, [](lv_event_t* e) {
-        lv_obj_t* container = lv_obj_get_child(lv_obj_get_parent(lv_event_get_target(e)), 1);
-        lv_obj_t* details_label = lv_obj_get_child(container, 0);
-        String entry = lv_label_get_text(details_label);
-        saveEntry(entry);
+    
+    // Store a copy of the current entry in user data to avoid using the global variable
+    lv_obj_set_user_data(btn_confirm, (void*)strdup(formattedEntryStr.c_str()));
+    
+    lv_obj_add_event_cb(btn_confirm, [](lv_event_t *e) {
+        lv_obj_t *btn = lv_event_get_target(e);
+        saveEntry(currentEntry); // Save raw entry
         createMainMenu();
+        DEBUG_PRINT("Returning to main menu after confirmation");
     }, LV_EVENT_CLICKED, NULL);
-
-    addStatusBar(confirmScreen);
-    updateStatus("Review and confirm", 0xFFFFFF);
-
-    lv_scr_load(confirmScreen);
-    DEBUG_PRINT("Confirm screen created");
-    delay(50); // Stabilize LVGL
-}
-
-void scanNetworks() {
-    // Don't start a new scan if one is already in progress
-    if (wifiScanInProgress) {
-        DEBUG_PRINT("WiFi scan already in progress, ignoring request");
-        return;
-    }
     
-    // Check if WiFi is enabled in settings
-    if (!wifiEnabled) {
-        DEBUG_PRINT("WiFi is disabled in settings, cannot scan");
-        updateStatus("WiFi is disabled in settings", 0xFF9900);
-        
-        // If we're on the WiFi screen, update the status label
-        if (wifi_status_label && lv_obj_is_valid(wifi_status_label)) {
-            lv_label_set_text(wifi_status_label, "WiFi is disabled. Enable WiFi in Settings first.");
-        }
-        return;
-    }
-    
-    // Check WiFi status using WiFiManager
-    if (!wifiManager.isInitialized()) {
-        DEBUG_PRINT("WiFi module not initialized");
-        updateStatus("WiFi module not found", 0xFF0000);
-        return;
-    } else if (wifiManager.isConnected()) {
-        DEBUG_PRINTF("WiFi connected to %s\n", WiFi.SSID().c_str());
-    } else {
-        DEBUG_PRINTF("WiFi status: %d\n", WiFi.status());
-    }
-    
-    // Clear previous list
-    if (wifi_list != nullptr) {
-        lv_obj_clean(wifi_list);
-    }
-    
-    // Create spinner if it doesn't exist
-    if (g_spinner == nullptr) {
-        g_spinner = lv_spinner_create(wifi_screen, 1000, 60);
-        lv_obj_set_size(g_spinner, 50, 50);
-        lv_obj_align(g_spinner, LV_ALIGN_CENTER, 0, 0);
-    }
-    
-    // Update status
-    updateStatus("Scanning for WiFi networks...", 0xFFFFFF);
-    
-    // Start WiFi scan using WiFiManager
-    DEBUG_PRINT("Starting WiFi scan");
-    
-    // Start the scan using WiFiManager
-    bool scanStarted = wifiManager.startScan();
-    
-    if (!scanStarted) {
-        DEBUG_PRINT("WiFi scan failed to start");
-        updateStatus("WiFi scan failed", 0xFF0000);
-        
-        // Clean up
-        if (g_spinner != nullptr) {
-            lv_obj_del(g_spinner);
-            g_spinner = nullptr;
-        }
-        return;
-    }
-    
-    // Set scan in progress flag and record start time
-    wifiScanInProgress = true;
-    lastScanStartTime = millis();
-    
-    // Create timer to check scan status
-    if (scan_timer != nullptr) {
-        lv_timer_del(scan_timer);
-    }
-    
-    // Reset batch processing variables
-    currentBatch = 0;
-    totalNetworksFound = 0;
-    
-    // If we have credentials, try to reconnect after scan
-    if (strlen(selected_ssid) > 0 && strlen(selected_password) > 0) {
-        DEBUG_PRINTF("Will reconnect to %s after scan\n", selected_ssid);
-    }
+    // Process UI updates to ensure everything is properly initialized
+    lv_timer_handler();
 }
 
 // Callback for WiFi button event
@@ -2642,18 +2689,16 @@ static void forget_btn_event_cb(lv_event_t* e) {
 
 String getFormattedEntry(const String& entry) {
     String entryData = entry;
-    String timestamp = getTimestamp(); // Default to current timestamp for new entries
+    String timestamp = getTimestamp(); // Default to current timestamp
 
-    // Check if the entry contains a timestamp (from log file)
+    // Check if the entry contains a timestamp
     int colonPos = entry.indexOf(": ");
     if (colonPos > 0 && colonPos <= 19 && entry.substring(0, 2).toInt() > 0) {
-        // This is a log entry with a timestamp
-        timestamp = entry.substring(0, colonPos + 1); // e.g., "05-Mar-2025 14:14:19: "
-        entryData = entry.substring(colonPos + 2);    // e.g., "Male,Red+Orange+Blue,..."
+        timestamp = entry.substring(0, colonPos + 1);
+        entryData = entry.substring(colonPos + 2);
         DEBUG_PRINTF("Extracted timestamp: %s\n", timestamp.c_str());
         DEBUG_PRINTF("Extracted entry data: %s\n", entryData.c_str());
     } else {
-        // No timestamp; assume this is a new entry (e.g., from confirmation screen)
         entryData = entry;
         DEBUG_PRINTF("No timestamp found, using raw entry: %s\n", entryData.c_str());
     }
@@ -2661,15 +2706,21 @@ String getFormattedEntry(const String& entry) {
     // Parse the entry data into parts
     String parts[5];
     int partCount = 0, startIdx = 0;
+    DEBUG_PRINTF("Parsing entryData: %s (length: %d)\n", entryData.c_str(), entryData.length());
     for (int i = 0; i < entryData.length() && partCount < 5; i++) {
         if (entryData.charAt(i) == ',') {
-            parts[partCount++] = entryData.substring(startIdx, i);
+            parts[partCount] = entryData.substring(startIdx, i);
+            DEBUG_PRINTF("Part %d: %s (from %d to %d)\n", partCount, parts[partCount].c_str(), startIdx, i);
+            partCount++;
             startIdx = i + 1;
         }
     }
     if (startIdx < entryData.length()) {
-        parts[partCount++] = entryData.substring(startIdx);
+        parts[partCount] = entryData.substring(startIdx);
+        DEBUG_PRINTF("Part %d: %s (from %d to end)\n", partCount, parts[partCount].c_str(), startIdx);
+        partCount++;
     }
+    DEBUG_PRINTF("Total parts found: %d\n", partCount);
 
     // Format the output
     String formatted = "Time: " + timestamp + "\n";
@@ -3368,7 +3419,6 @@ void createSoundSettingsScreen() {
         createSettingsScreen();
     }, LV_EVENT_CLICKED, NULL);
 
-    load_screen_with_animation(sound_settings_screen, TRANSITION_SLIDE_UP, 300);
     DEBUG_PRINT("Sound settings screen created");
 }
 
@@ -3575,7 +3625,6 @@ void createBrightnessSettingsScreen() {
         createSettingsScreen();
     }, LV_EVENT_CLICKED, NULL);
     
-    load_screen_with_animation(brightness_settings_screen, TRANSITION_SLIDE_UP, 300);
     DEBUG_PRINT("Finished createBrightnessSettingsScreen");
 }
 // Create a function to show the WiFi loading screen
