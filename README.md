@@ -188,6 +188,7 @@ The system uses state machines for managing:
 - **View Logs**: Browse through previously saved log entries
 - **Settings**: Access system configuration options
 - **WiFi**: Configure wireless network settings
+- **Power Management**: Control device power options (power off, restart, sleep)
 
 ### Adding a New Entry
 1. From the main menu, select "Log New Entry"
@@ -217,6 +218,14 @@ The system uses state machines for managing:
 3. **Sound Settings**
    - Toggle sound on/off
    - Adjust volume level
+
+### Power Management
+1. From the main menu, select "Power"
+2. Choose from three options:
+   - **Power Off**: Safely powers down the device with a 3-second countdown
+   - **Restart**: Restarts the device with a 3-second countdown
+   - **Sleep Mode**: Puts the device into deep sleep mode until the screen is touched
+3. For Sleep Mode, the device enters a low-power state and can be awakened by touching the screen
 
 ### Physical Controls
 - **Dual Button & Key Unit**

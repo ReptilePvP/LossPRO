@@ -66,6 +66,7 @@ The Loss Prevention Log system is an IoT device built on the M5Stack CoreS3 plat
      - WiFi configuration with loading screen
      - Log viewing
      - Settings screens (sound, brightness)
+     - Power management screen with power off, restart, and sleep options
    - Optimized scrollable lists with non-scrollable headers and individual items
    - Visual feedback for WiFi connection attempts
    - Smooth transitions between screens for improved user experience
@@ -80,7 +81,17 @@ The Loss Prevention Log system is an IoT device built on the M5Stack CoreS3 plat
    - Fallback to RTC when internet is unavailable
    - Time display in 12-hour format with AM/PM
 
-8. **Network Connectivity**
+8. **Power Management**
+   - Dedicated power management screen accessible from main menu
+   - Three power options:
+     - Power Off: Safely powers down the device with countdown
+     - Restart: Restarts the device with countdown
+     - Sleep Mode: Puts device into deep sleep until touched
+   - Utilizes M5Stack CoreS3's power management capabilities
+   - Implements hardware-level power control via AXP2101 and AW9523 chips
+   - Touch wake-up functionality for sleep mode
+
+9. **Network Connectivity**
    - WiFi connection for time synchronization
    - Optional webhook functionality for remote logging
    - Enhanced WiFi scanning with proper state management
@@ -114,6 +125,7 @@ The Loss Prevention Log system is an IoT device built on the M5Stack CoreS3 plat
    - Sound settings
    - Brightness control
    - Time settings
+   - Power management options
 
 5. **WiFi Management**
    - Scan for available networks
@@ -193,6 +205,7 @@ The Loss Prevention Log system is an IoT device built on the M5Stack CoreS3 plat
 - `createWiFiManagerScreen()`: Creates the WiFi manager screen with scrollable network list
 - `showWiFiLoadingScreen()`: Shows loading screen during WiFi connection attempts
 - `updateWiFiLoadingScreen()`: Updates the WiFi loading screen based on connection results
+- `createPowerManagementScreen()`: Creates the power management screen with power off, restart, and sleep options
 
 ### Screen Transitions
 - `load_screen_with_animation()`: Main function for loading screens with transitions
@@ -223,23 +236,6 @@ The Loss Prevention Log system is an IoT device built on the M5Stack CoreS3 plat
 - `syncTimeWithNTP()`: Synchronizes time with NTP servers
 - `updateBatteryIndicator()`: Updates the battery level indicator
 - `updateWifiIndicator()`: Updates the WiFi connection indicator
-
-## UI Enhancements
-
-### Scrollable Lists
-- Implemented in the WiFi manager screen for saved networks list
-- Individual network items are non-scrollable for better user experience
-- Proper padding between items for visual separation
-
-### Non-Scrollable Headers
-- Headers in various screens (logs, settings, etc.) are set as non-scrollable
-- Improves user experience by keeping titles visible during scrolling
-
-### WiFi Connection Feedback
-- Loading screen with spinner during connection attempts
-- Visual feedback for successful or failed connections
-- Automatic return to WiFi manager after successful connection
-- Manual return option for failed connections
 
 ## Hardware Interfaces
 

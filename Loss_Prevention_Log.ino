@@ -1,3 +1,5 @@
+#include <SPI.h>
+
 #include "WiFiManager.h"
 #include <HTTPClient.h>
 #include <Wire.h>
@@ -7,7 +9,6 @@
 #include <lvgl.h>
 #include <WiFi.h>
 #include <Preferences.h>
-#include <SPI.h>
 SPIClass SPI_SD; // Custom SPI instance for SD card
 #include <SD.h>
 #include <time.h>
@@ -32,8 +33,10 @@ static lv_style_t style_card_pressed;    // Pressed state for interactive cards
 WiFiManager wifiManager;
 
 // Global variables to store selected date/time temporarily
-static lv_calendar_date_t selected_date = {2025, 3, 13}; // Default date
 static int selected_hour = 0, selected_minute = 0, selected_is_pm = 0;
+static lv_calendar_date_t highlighted_dates[1];  // Static to persist
+// Assuming selected_date is a global defined elsewhere
+extern lv_calendar_date_t selected_date;
 
 // Debug flag - set to true to enable debug output
 #define DEBUG_ENABLED true
@@ -138,7 +141,9 @@ static const int LOGS_PER_PAGE = 8;
 
 lv_obj_t* status_bar = nullptr;
 char current_status_msg[32] = "";
+
 uint32_t current_status_color = 0xFFFFFF;
+uint32_t error_status_color = 0xFF0000;
 
 // Screen dimensions for CoreS3
 #define SCREEN_WIDTH 320
@@ -418,7 +423,6 @@ String getTimestamp() {
     }
     return "NoTime"; // Fallback if RTC isn’t set
 }
-
 // Example usage in logging
 bool appendToLog(const String& entry) {
     if (!fileSystemInitialized) {
@@ -3138,12 +3142,27 @@ void onWiFiScanComplete(const std::vector<NetworkInfo>& results) {
 
 static void createDateSettingsScreen() {
     static lv_obj_t* date_screen = nullptr;
+    
     if (date_screen) {
         lv_obj_del(date_screen);
         date_screen = nullptr;
     }
+    
+    size_t free_heap = esp_get_free_heap_size();
+    DEBUG_PRINTF("Free heap before date screen: %u bytes\n", free_heap);
+    if (free_heap < 100000) {
+        DEBUG_PRINT("Insufficient memory for date screen");
+        updateStatus("Low Memory", error_status_color);
+        return;
+    }
+
     date_screen = lv_obj_create(NULL);
+    if (!date_screen) {
+        DEBUG_PRINT("Failed to create date screen");
+        return;
+    }
     lv_obj_add_style(date_screen, &style_screen, 0);
+    DEBUG_PRINT("Screen created");
 
     // Header
     lv_obj_t* header = lv_obj_create(date_screen);
@@ -3153,40 +3172,77 @@ static void createDateSettingsScreen() {
     lv_label_set_text(title, "Set Date");
     lv_obj_add_style(title, &style_title, 0);
     lv_obj_align(title, LV_ALIGN_CENTER, 0, 0);
+    DEBUG_PRINT("Header created");
 
     // Container
     lv_obj_t* container = lv_obj_create(date_screen);
-    lv_obj_set_size(container, SCREEN_WIDTH - 20, SCREEN_HEIGHT - 60);
-    lv_obj_align(container, LV_ALIGN_TOP_MID, 0, 50);
+    lv_obj_set_size(container, SCREEN_WIDTH - 20, SCREEN_HEIGHT - 100);
+    lv_obj_align(container, LV_ALIGN_TOP_MID, 0, 80);
     lv_obj_set_style_bg_opa(container, LV_OPA_TRANSP, 0);
     lv_obj_set_flex_flow(container, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_style_pad_row(container, 10, 0);
+    lv_obj_set_style_pad_row(container, 30, 0);
+    lv_obj_set_style_pad_top(container, 20, 0);
+    DEBUG_PRINT("Container created");
 
     // Current Date Label
     lv_obj_t* current_date_label = lv_label_create(container);
     m5::rtc_date_t DateStruct;
-    M5.Rtc.getDate(&DateStruct);
     char date_str[32];
-    snprintf(date_str, sizeof(date_str), "%04d-%02d-%02d", DateStruct.year, DateStruct.month, DateStruct.date);
+    if (!M5.Rtc.getDate(&DateStruct)) {
+        DEBUG_PRINT("Failed to get RTC date");
+        snprintf(date_str, sizeof(date_str), "RTC Error");
+    } else {
+        snprintf(date_str, sizeof(date_str), "Current: %04d-%02d-%02d", 
+                DateStruct.year, DateStruct.month, DateStruct.date);
+    }
     lv_label_set_text(current_date_label, date_str);
     lv_obj_set_style_text_font(current_date_label, &lv_font_montserrat_16, 0);
+    lv_obj_align(current_date_label, LV_ALIGN_TOP_MID, 0, 0);
+    lv_obj_set_style_text_color(current_date_label, lv_color_hex(0xFFFFFF), 0);
+    DEBUG_PRINTF("Label set to: %s\n", date_str);
 
-    // Date Picker
-    lv_obj_t* date_picker = lv_calendar_create(container);
-    lv_obj_set_size(date_picker, 280, 120);
-    lv_calendar_set_today_date(date_picker, DateStruct.year, DateStruct.month, DateStruct.date);
-    lv_calendar_set_showed_date(date_picker, DateStruct.year, DateStruct.month);
-    lv_calendar_set_highlighted_dates(date_picker, &selected_date, 1);
+    // Roller Container for Year, Month, Day
+    lv_obj_t* roller_container = lv_obj_create(container);
+    lv_obj_set_size(roller_container, SCREEN_WIDTH - 40, 120);
+    lv_obj_align(roller_container, LV_ALIGN_CENTER, 0, 0);
+    lv_obj_set_flex_flow(roller_container, LV_FLEX_FLOW_ROW);
+    lv_obj_set_style_pad_column(roller_container, 10, 0);
+    lv_obj_set_style_bg_opa(roller_container, LV_OPA_TRANSP, 0);
+    DEBUG_PRINT("Roller container created");
 
-    lv_obj_add_event_cb(date_picker, [](lv_event_t* e) {
-        lv_calendar_date_t date;
-        if (lv_calendar_get_pressed_date(lv_event_get_target(e), &date)) {
-            if (date.year > 0 && date.month > 0 && date.day > 0) {
-                selected_date = date;
-                lv_calendar_set_highlighted_dates(lv_event_get_target(e), &selected_date, 1);
-            }
-        }
-    }, LV_EVENT_VALUE_CHANGED, NULL);
+    // Year Roller
+    lv_obj_t* year_roller = lv_roller_create(roller_container);
+    lv_roller_set_options(year_roller, "2020\n2021\n2022\n2023\n2024\n2025\n2026\n2027\n2028\n2029", LV_ROLLER_MODE_NORMAL);
+    lv_obj_set_width(year_roller, 80);
+    lv_roller_set_visible_row_count(year_roller, 3);
+    lv_roller_set_selected(year_roller, DateStruct.year - 2020, LV_ANIM_OFF);  // 2020 = index 0
+    DEBUG_PRINT("Year roller created");
+
+    // Month Roller
+    lv_obj_t* month_roller = lv_roller_create(roller_container);
+    lv_roller_set_options(month_roller, "01\n02\n03\n04\n05\n06\n07\n08\n09\n10\n11\n12", LV_ROLLER_MODE_NORMAL);
+    lv_obj_set_width(month_roller, 60);
+    lv_roller_set_visible_row_count(month_roller, 3);
+    lv_roller_set_selected(month_roller, DateStruct.month - 1, LV_ANIM_OFF);  // 1 = index 0
+    DEBUG_PRINT("Month roller created");
+
+    // Day Roller
+    lv_obj_t* day_roller = lv_roller_create(roller_container);
+    char day_options[128];
+    snprintf(day_options, sizeof(day_options), 
+             "01\n02\n03\n04\n05\n06\n07\n08\n09\n10\n11\n12\n13\n14\n15\n16\n17\n18\n19\n20\n21\n22\n23\n24\n25\n26\n27\n28\n29\n30\n31");
+    lv_roller_set_options(day_roller, day_options, LV_ROLLER_MODE_NORMAL);
+    lv_obj_set_width(day_roller, 60);
+    lv_roller_set_visible_row_count(day_roller, 3);
+    lv_roller_set_selected(day_roller, DateStruct.date - 1, LV_ANIM_OFF);  // 1 = index 0
+    DEBUG_PRINT("Day roller created");
+
+    // Create RollerData struct and pass as user data
+    static RollerData roller_data = {year_roller, month_roller, day_roller, current_date_label};
+    
+    lv_obj_add_event_cb(year_roller, roller_event_handler, LV_EVENT_VALUE_CHANGED, &roller_data);
+    lv_obj_add_event_cb(month_roller, roller_event_handler, LV_EVENT_VALUE_CHANGED, &roller_data);
+    lv_obj_add_event_cb(day_roller, roller_event_handler, LV_EVENT_VALUE_CHANGED, &roller_data);
 
     // Continue Button
     lv_obj_t* continue_btn = lv_btn_create(container);
@@ -3213,7 +3269,8 @@ static void createDateSettingsScreen() {
     }, LV_EVENT_CLICKED, NULL);
 
     lv_scr_load(date_screen);
-}   
+    DEBUG_PRINTF("Free heap after date screen: %u bytes\n", esp_get_free_heap_size());
+}
 
 void createSettingsScreen() {
     DEBUG_PRINTF("Free heap before settings screen: %d bytes\n", heap_caps_get_free_size(MALLOC_CAP_8BIT));
@@ -3718,7 +3775,40 @@ void updateWiFiLoadingScreen(bool success, const String& message) {
         }, 2000, NULL);
     }
 }
+// Struct to hold roller data
+struct RollerData {
+    lv_obj_t* year_roller;
+    lv_obj_t* month_roller;
+    lv_obj_t* day_roller;
+    lv_obj_t* current_date_label;
+};
+// Event handler function (non-lambda)
+static void roller_event_handler(lv_event_t* e) {
+    RollerData* data = static_cast<RollerData*>(lv_event_get_user_data(e));
+    lv_obj_t* roller = lv_event_get_target(e);
+    
+    if (lv_event_get_code(e) == LV_EVENT_VALUE_CHANGED) {
+        uint16_t year = lv_roller_get_selected(data->year_roller) + 2020;
+        uint16_t month = lv_roller_get_selected(data->month_roller) + 1;
+        uint16_t day = lv_roller_get_selected(data->day_roller) + 1;
 
+        // Basic validation (not full leap year logic)
+        if (day > 31 || (month == 2 && day > 28 && (year % 4 != 0 || year % 100 == 0 && year % 400 != 0)) ||
+            ((month == 4 || month == 6 || month == 9 || month == 11) && day > 30)) {
+            DEBUG_PRINTF("Invalid date selected: %d-%d-%d\n", year, month, day);
+            return;
+        }
+
+        selected_date.year = year;
+        selected_date.month = month;
+        selected_date.day = day;
+
+        char new_date_str[32];
+        snprintf(new_date_str, sizeof(new_date_str), "Selected: %04d-%02d-%02d", year, month, day);
+        lv_label_set_text(data->current_date_label, new_date_str);
+        DEBUG_PRINTF("Date updated to: %s\n", new_date_str);
+    }
+}
 // Function to add a time display to a screen// Implementation of time display
 void addTimeDisplay(lv_obj_t *screen) {
     lv_obj_t* time_card = lv_obj_create(screen);

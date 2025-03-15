@@ -33,6 +33,7 @@
    - Settings Menu
    - Brightness Settings Screen
    - Sound Settings Screen
+   - Power Management Screen
 
 2. **Data Management**
    - Local storage on SD card
@@ -89,6 +90,7 @@
    - `logs_screen`: View and navigate saved logs
    - `brightness_settings_screen`: Display brightness adjustment
    - `sound_settings_screen`: Sound settings configuration
+   - `power_management_screen`: Power management options
 
 2. **Status Indicators**
    - Battery indicator (top-left corner)
@@ -131,6 +133,7 @@
 - `createSettingsScreen()`: System settings configuration
 - `createBrightnessSettingsScreen()`: Display brightness adjustment
 - `createSoundSettingsScreen()`: Sound settings configuration
+- `createPowerManagementScreen()`: Power management options (power off, restart, sleep)
 
 #### Screen Transitions
 - `load_screen_with_animation(lv_obj_t* new_screen, screen_transition_type_t type, uint32_t time)`: Loads a new screen with the specified transition animation
